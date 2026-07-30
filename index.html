@@ -1927,7 +1927,7 @@ $#
 $I" title="Enter up to 10 commands, one per line."></textarea>
           <button class="btn" id="copy-link-btn">Copy Link</button>
           <button class="icon-btn" id="reset-advanced-btn" title="Reset all advanced diagnostic fields to their default values and clear any loaded preset.">Reset Advanced Connection</button>
-          <div class="help-text">These commands run one at a time in order, and stop if the active command returns <code>error:</code> or <code>ALARM:</code>. Use <code>hex:18</code> for a raw byte like <code>0x18</code>. Reserved builder actions: <code>|clip</code> copies the current diagnostics log to the system clipboard.</div>
+          <div class="help-text">These commands run one at a time in order, and stop if the active command returns <code>error:</code> or <code>ALARM:</code>. Use <code>hex:18</code> for a raw byte like <code>0x18</code>. Reserved builder actions: <code>|clip</code> copies the current diagnostics log to the system clipboard. <code>|disconnect</code> closes the active connection and stops the remaining sequence.</div>
         </div>
       </details>
       </div><!-- end serial-controls -->
@@ -9126,6 +9126,9 @@ function normalizeCommandInput(raw) {
   if (/^\|(clip|copy|copy-log)$/i.test(text)) {
     return { input: text, send: text, display: '|clip', waitForAck: false, kind: 'action', action: 'clip' };
   }
+  if (/^\|disconnect$/i.test(text)) {
+    return { input: text, send: text, display: '|disconnect', waitForAck: false, kind: 'action', action: 'disconnect' };
+  }
   if (text === '!') {
     return { input: text, send: '!', payload: Uint8Array.of(0x21), display: '!', waitForAck: false };
   }
@@ -10183,6 +10186,10 @@ async function executeSequenceCommand(rawCommand, options = {}) {
     if (command.action === 'clip') {
       const copyResult = await copyDiagnosticsLog();
       return { status: copyResult.ok ? 'action' : 'error', line: copyResult.ok ? (copyResult.method === 'download' ? 'Diagnostics download fallback completed' : 'Diagnostics log copied to clipboard') : 'Clipboard copy failed' };
+    }
+    if (command.action === 'disconnect') {
+      await disconnectPort('Builder action DISCONNECT');
+      return { status: 'action', line: 'Connection closed by builder action' };
     }
     return { status: 'skipped', line: `Unknown action ${command.display}` };
   }
