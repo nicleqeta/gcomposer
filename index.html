@@ -1908,7 +1908,7 @@
           <div class="check-input-row">
             <label class="check-row">
               <input type="checkbox" id="banner-wait-toggle" checked>
-              <span>Banner wait</span>
+              <span>Startup text wait</span>
             </label>
             <input type="number" id="banner-wait-ms-input" min="1" max="10000" step="100" value="3000" placeholder="3000" title="Milliseconds to wait for startup text before proceeding.">
           </div>
@@ -9535,6 +9535,15 @@ function collectBuilderCommands() {
   return builderCommandsInput.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
 }
 
+function formatStartupWaitValue(timeoutMs) {
+  return timeoutMs === 0 ? 'disabled' : `${timeoutMs ?? DEFAULT_BANNER_TIMEOUT_MS} ms`;
+}
+
+function describeStartupResolution(reason) {
+  if (reason === 'startup-text') return 'startup text';
+  return reason;
+}
+
 function buildPresetSummary(config) {
   const summary = [];
   summary.push(`Preset: ${config.name || 'custom-link'}`);
@@ -9543,7 +9552,7 @@ function buildPresetSummary(config) {
   summary.push(`Observe only: ${config.observeOnly ? 'yes' : 'no'}`);
   if (config.showRequestResponseCorrelation) summary.push('Request/response correlation: shown');
   if (config.waitMs) summary.push(`Wait: ${config.waitMs} ms`);
-  summary.push(`Banner wait: ${config.bannerTimeoutMs === 0 ? 'disabled' : `${config.bannerTimeoutMs ?? DEFAULT_BANNER_TIMEOUT_MS} ms`}`);
+  summary.push(`Startup text wait: ${formatStartupWaitValue(config.bannerTimeoutMs)}`);
   summary.push(`Step delay: ${config.sequenceDelayMs === 0 ? 'disabled' : `${config.sequenceDelayMs} ms`}`);
   if (config.invalidCommands.length) summary.push(config.invalidCommands.join(' | '));
   return summary;
@@ -9868,8 +9877,8 @@ function buildDiscoursePayload() {
     `Baud: ${currentRun.baud || baudSelect.value}`,
     `DTR mode: ${currentRun.dtrMode || 'default'}`,
     `Observe only: ${currentRun.observeOnly ? 'yes' : 'no'}`,
-    `Banner wait: ${currentRun.bannerTimeoutMs === 0 ? 'disabled' : `${currentRun.bannerTimeoutMs || DEFAULT_BANNER_TIMEOUT_MS} ms`}`,
-    `Startup resolved: ${currentRun.startupResolved || 'not-run'}`,
+    `Startup text wait: ${formatStartupWaitValue(currentRun.bannerTimeoutMs)}`,
+    `Startup resolved: ${describeStartupResolution(currentRun.startupResolved || 'not-run')}`,
     `GRBL banner: ${currentRun.startupBannerLine || startupBannerLine || 'n/a'}`,
     `Ready line: ${currentRun.startupReadyLine || 'n/a'}`,
     `Port info: ${formatPortInfo(currentRun.portInfo)}`,
@@ -10170,7 +10179,7 @@ function handleSequenceResponseLine(line) {
 function waitForSequenceCommandResult(command, requestId, timeoutMs = 3500) {
   return new Promise(resolve => {
     const timeoutId = setTimeout(() => {
-      if (pendingSequenceResponse?.timeoutId === timeoutId) {
+      if (pendingSequenceResponse?.timeoutId === timeoutId && pendingSequenceResponse?.requestId === requestId) {
         settlePendingSequenceResponse({ status: 'timeout', line: `No terminal acknowledgement for ${command.display} within ${timeoutMs} ms`, requestId, command });
       }
     }, timeoutMs);
@@ -10203,23 +10212,42 @@ async function executeSequenceCommand(rawCommand, options = {}) {
   const requestId = `req-${++sequenceRequestCounter}`;
   const showRequestResponseCorrelation = Boolean(currentRun.showRequestResponseCorrelation);
   const taggedDisplay = showRequestResponseCorrelation ? `[${requestId}] ${command.display}` : command.display;
+  const timeoutMs = options.timeoutMs == null
+    ? getControllerDefaultAckTimeoutMs(3500)
+    : Math.max(1, Math.round(Number(options.timeoutMs) || 0));
+  const shouldWaitForAck = shouldWaitForCommandAck(command, options);
+  let pendingResult = null;
+
+  if (shouldWaitForAck) {
+    if (pendingSequenceResponse) {
+      const blockingCommand = pendingSequenceResponse.command?.display || 'another command';
+      const line = showRequestResponseCorrelation
+        ? `[${requestId}] cannot send ${command.display} while awaiting terminal acknowledgement for ${blockingCommand}`
+        : `Cannot send ${command.display} while awaiting terminal acknowledgement for ${blockingCommand}`;
+      addLine(line, 'err');
+      return { status: 'error', line, requestId, command };
+    }
+    if (showRequestResponseCorrelation) addLine(`[${requestId}] awaiting terminal acknowledgement for ${command.display}`, 'sys');
+    pendingResult = waitForSequenceCommandResult(command, requestId, timeoutMs);
+  }
+
   const sent = await sendCommand(command.payload || command.send, taggedDisplay);
-  if (!sent) return { status: 'error', line: `${taggedDisplay} failed to write`, requestId, command };
+  if (!sent) {
+    if (shouldWaitForAck && pendingSequenceResponse?.requestId === requestId) {
+      settlePendingSequenceResponse({ status: 'cancelled', line: `${command.display} failed before terminal acknowledgement`, requestId, command });
+    }
+    return { status: 'error', line: `${taggedDisplay} failed to write`, requestId, command };
+  }
   if (basicRunning && command.send === '!') setBasicPaused(true);
   if (basicRunning && command.send === '~') setBasicPaused(false);
   if (basicRunning && command.send === '\x18') {
     requestBasicStop('Soft reset sent; aborting GCOM script...', '--- Script aborted by soft reset ---');
   }
-  const timeoutMs = options.timeoutMs == null
-    ? getControllerDefaultAckTimeoutMs(3500)
-    : Math.max(1, Math.round(Number(options.timeoutMs) || 0));
-  const shouldWaitForAck = shouldWaitForCommandAck(command, options);
   if (!shouldWaitForAck) {
     if (showRequestResponseCorrelation) addLine(`[${requestId}] completed without terminal acknowledgement wait`, 'sys');
     return { status: 'sent', line: `${taggedDisplay} sent without acknowledgement wait`, requestId, command };
   }
-  if (showRequestResponseCorrelation) addLine(`[${requestId}] awaiting terminal acknowledgement for ${command.display}`, 'sys');
-  return waitForSequenceCommandResult(command, requestId, timeoutMs);
+  return pendingResult;
 }
 
 async function waitForStep(ms, token) {
@@ -10230,10 +10258,10 @@ async function waitForStep(ms, token) {
 
 async function waitForReadySignal(timeoutMs, token) {
   if (timeoutMs === 0) return { reason: 'disabled', triggerLine: null };
-  if (readySignalSeen) return { reason: 'banner', triggerLine: readySignalLine };
+  if (readySignalSeen) return { reason: 'startup-text', triggerLine: readySignalLine };
   const startedAt = Date.now();
   while (isSequenceActive(token)) {
-    if (readySignalSeen) return { reason: 'banner', triggerLine: readySignalLine };
+    if (readySignalSeen) return { reason: 'startup-text', triggerLine: readySignalLine };
     if (Date.now() - startedAt >= timeoutMs) return { reason: 'timeout', triggerLine: null };
     await delay(50);
   }
@@ -10312,56 +10340,80 @@ async function runStartupSequence(config, token) {
     if (!(await waitForStep(config.waitMs, token))) return;
   }
 
-  if (config.commands.length) {
-    currentRun.startupResolved = 'preset-commands';
-    currentRun.startupReadyLine = null;
-    addLine('Running preset command sequence', 'sys');
-    for (let i = 0; i < config.commands.length; i++) {
-      if (!isSequenceActive(token)) return;
-      const command = normalizeCommandInput(config.commands[i]);
-      if (!command) continue;
-      addLine(`Sequence ${i + 1}/${config.commands.length}: ${command.display}`, 'sys');
-      const result = await executeSequenceCommand(config.commands[i]);
-      if (result.status === 'error' || result.status === 'alarm') {
-        addLine(`Sequence stopped on ${result.status}: ${result.line}`, 'err'); return;
-      }
-      if (result.status === 'timeout') addLine(result.line, 'sys');
-      if (i < config.commands.length - 1) {
-        if (!(await waitForStep(config.sequenceDelayMs, token))) return;
-      }
+  const runsPresetCommands = config.commands.length > 0;
+  const shouldResolveStartupText = runsPresetCommands || !config.observeOnly;
+
+  if (shouldResolveStartupText) {
+    const startupWaitMs = config.bannerTimeoutMs ?? DEFAULT_BANNER_TIMEOUT_MS;
+    if (startupWaitMs > 0) {
+      addLine(
+        runsPresetCommands
+          ? `Waiting up to ${startupWaitMs} ms for startup text before preset commands`
+          : `Waiting up to ${startupWaitMs} ms for startup text`,
+        'sys'
+      );
     }
+
+    const ready = await waitForReadySignal(startupWaitMs, token);
+    if (!isSequenceActive(token) || ready.reason === 'cancelled') return;
+
+    currentRun.startupResolved = ready.reason;
+    currentRun.startupReadyLine = ready.triggerLine;
+
+    if (ready.reason === 'startup-text' && ready.triggerLine) {
+      addLine(
+        runsPresetCommands
+          ? `Startup text detected before preset commands: "${ready.triggerLine}"`
+          : `Startup text detected: "${ready.triggerLine}"`,
+        'sys'
+      );
+    } else if (ready.reason === 'timeout') {
+      addLine(
+        runsPresetCommands
+          ? 'No startup text detected within timeout - proceeding with preset commands'
+          : 'No startup text detected within timeout - proceeding anyway',
+        'sys'
+      );
+    } else if (ready.reason === 'disabled') {
+      addLine(
+        runsPresetCommands
+          ? 'Startup text wait disabled - running preset commands immediately'
+          : 'Startup text wait disabled - proceeding immediately',
+        'sys'
+      );
+    }
+    addLine(`Startup resolved via: ${describeStartupResolution(ready.reason)}`, 'sys');
+
+    if (runsPresetCommands) {
+      addLine('Running preset command sequence', 'sys');
+      for (let i = 0; i < config.commands.length; i++) {
+        if (!isSequenceActive(token)) return;
+        const command = normalizeCommandInput(config.commands[i]);
+        if (!command) continue;
+        addLine(`Sequence ${i + 1}/${config.commands.length}: ${command.display}`, 'sys');
+        const result = await executeSequenceCommand(config.commands[i]);
+        if (result.status === 'error' || result.status === 'alarm') {
+          addLine(`Sequence stopped on ${result.status}: ${result.line}`, 'err'); return;
+        }
+        if (result.status === 'timeout') addLine(result.line, 'sys');
+        if (i < config.commands.length - 1) {
+          if (!(await waitForStep(config.sequenceDelayMs, token))) return;
+        }
+      }
+      return;
+    }
+
+    if (!(await waitForStep(DEFAULT_READY_SETTLE_MS, token))) return;
+
+    addLine('Sending wake signal...', 'sys');
+    await sendCommand('\n');
+    if (!(await waitForStep(config.sequenceDelayMs || DEFAULT_STATUS_DELAY_MS, token))) return;
+    await sendCommand('?');
     return;
   }
 
-  if (config.observeOnly) {
-    currentRun.startupResolved = 'observe-only';
-    addLine('Observe-only mode enabled. Startup traffic suppressed.', 'sys');
-    return;
-  }
-
-  if ((config.bannerTimeoutMs ?? DEFAULT_BANNER_TIMEOUT_MS) > 0) {
-    addLine(`Waiting up to ${config.bannerTimeoutMs ?? DEFAULT_BANNER_TIMEOUT_MS} ms for startup text`, 'sys');
-  }
-
-  const ready = await waitForReadySignal(config.bannerTimeoutMs ?? DEFAULT_BANNER_TIMEOUT_MS, token);
-  if (!isSequenceActive(token) || ready.reason === 'cancelled') return;
-
-  currentRun.startupResolved = ready.reason;
-  currentRun.startupReadyLine = ready.triggerLine;
-
-  if (ready.reason === 'banner' && ready.triggerLine) {
-    addLine(`Startup text detected: "${ready.triggerLine}"`, 'sys');
-  } else if (ready.reason === 'timeout') {
-    addLine('No startup text detected within timeout - proceeding anyway', 'sys');
-  }
-  addLine(`Startup resolved via: ${ready.reason}`, 'sys');
-
-  if (!(await waitForStep(DEFAULT_READY_SETTLE_MS, token))) return;
-
-  addLine('Sending wake signal...', 'sys');
-  await sendCommand('\n');
-  if (!(await waitForStep(config.sequenceDelayMs || DEFAULT_STATUS_DELAY_MS, token))) return;
-  await sendCommand('?');
+  currentRun.startupResolved = 'observe-only';
+  addLine('Observe-only mode enabled. Startup traffic suppressed.', 'sys');
 }
 
 async function disconnectPort(reason = 'Disconnected') {
