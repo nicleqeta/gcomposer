@@ -2296,6 +2296,7 @@ const cmdPlaceholder = document.getElementById('cmd-placeholder');
 const baudSelect   = document.getElementById('baud-select');
 const basicSection = document.getElementById('basic-section');
 const advancedSection = document.getElementById('advanced-section');
+const gcodeSection = document.getElementById('gcode-section');
 const dtrModeSelect= document.getElementById('dtr-mode-select');
 const observeToggle= document.getElementById('observe-toggle');
 const showRequestResponseToggle = document.getElementById('show-request-response-toggle');
@@ -2570,6 +2571,7 @@ let readySignalLine = null;
 let readySignalAt = null;
 let startupBannerLine = null;
 let sidebarResizeState = null;
+let sidebarLayoutRefreshFrame = 0;
 let startupScriptRequest = null;
 let controllerProfileRegistry = null;
 let controllerProfilesById = {};
@@ -3433,6 +3435,7 @@ function updateSidebarResize(event) {
   if (!sidebarResizeState || !isSidebarResizable()) return;
   const nextWidth = sidebarResizeState.startWidth + (event.clientX - sidebarResizeState.startX);
   applySidebarWidth(nextWidth);
+  refreshSidebarScrollArea({ remeasureBasicComposer: Boolean(basicSection?.open) });
 }
 
 function startSidebarResize(event) {
@@ -3443,6 +3446,27 @@ function startSidebarResize(event) {
     startWidth: sidebar.getBoundingClientRect().width
   };
   document.body.classList.add('sidebar-resizing');
+}
+
+function refreshSidebarScrollArea({ remeasureBasicComposer = false } = {}) {
+  if (!sidebar) return;
+  if (sidebarLayoutRefreshFrame) cancelAnimationFrame(sidebarLayoutRefreshFrame);
+  const previousScrollTop = sidebar.scrollTop;
+  sidebarLayoutRefreshFrame = requestAnimationFrame(() => {
+    sidebarLayoutRefreshFrame = 0;
+    if (remeasureBasicComposer && basicSection?.open) {
+      if (basicDescPaneEdit?.classList.contains('active')) autoResizeBasicDescription();
+      autoResizeBasicScriptInput();
+    }
+    void sidebar.offsetHeight;
+    const maxScrollTop = Math.max(0, sidebar.scrollHeight - sidebar.clientHeight);
+    sidebar.scrollTop = Math.min(previousScrollTop, maxScrollTop);
+  });
+}
+
+function setSidebarSectionOpen(section, open, { remeasureBasicComposer = false } = {}) {
+  if (section && section.open !== open) section.open = open;
+  refreshSidebarScrollArea({ remeasureBasicComposer });
 }
 
 let terminalFollowFrame = 0;
@@ -3816,6 +3840,7 @@ function setBasicDescriptionTab(nextTab) {
     const targetElement = editing ? basicDescriptionInput : basicConfigBox;
     setBasicDescriptionScrollByRatio(targetElement, basicDescriptionScrollRatio);
     if (editing) autoResizeBasicDescription();
+    refreshSidebarScrollArea();
   });
 }
 
@@ -4852,7 +4877,7 @@ function applyBasicScriptPackage(script, { sourceId = '', overrides = null, upda
   basicSourceId = sourceId || '';
   renderVarEditor(basicLoadedVars);
   refreshBasicVariableViews(updateHistory);
-  if (basicSection) basicSection.open = true;
+  setSidebarSectionOpen(basicSection, true, { remeasureBasicComposer: true });
 }
 
 function parseStartupScriptRequest() {
@@ -7775,7 +7800,7 @@ async function openBasicPreview() {
   updateBasicValidationUi();
   updateBasicControlUi();
   if (basicValidationState.errors.length) {
-    if (basicSection) basicSection.open = true;
+    setSidebarSectionOpen(basicSection, true, { remeasureBasicComposer: true });
     addLine('Cannot preview GCOM script until syntax errors are fixed', 'err');
     return;
   }
@@ -8881,7 +8906,7 @@ basicRunBtn.addEventListener('click', async () => {
   updateBasicValidationUi();
   updateBasicControlUi();
   if (basicValidationState.errors.length) {
-    if (basicSection) basicSection.open = true;
+    setSidebarSectionOpen(basicSection, true, { remeasureBasicComposer: true });
     addLine('Cannot run GCOM script until syntax errors are fixed', 'err');
     return;
   }
@@ -8947,6 +8972,7 @@ if (applyGcomStarterBtn) {
 // Enable/disable run button based on connection and script content
 basicScriptInput.addEventListener('input', () => {
   autoResizeBasicScriptInput();
+  refreshSidebarScrollArea();
   markBasicScriptStructuralDirty();
 });
 
@@ -8956,7 +8982,10 @@ basicScriptInput.addEventListener('input', () => {
   });
 });
 
-basicDescriptionInput.addEventListener('input', autoResizeBasicDescription);
+basicDescriptionInput.addEventListener('input', () => {
+  autoResizeBasicDescription();
+  refreshSidebarScrollArea();
+});
 
 basicDescTabEdit.addEventListener('click', () => setBasicDescriptionTab('edit'));
 basicDescTabRendered.addEventListener('click', () => setBasicDescriptionTab('rendered'));
@@ -9311,7 +9340,7 @@ function applySelectedGcomStarter() {
     if (!basicDescriptionInput.value.trim()) basicDescriptionInput.value = 'Fill in your script steps and variables.';
     autoResizeBasicDescription();
     markBasicScriptStructuralDirty();
-    if (basicSection) basicSection.open = true;
+    setSidebarSectionOpen(basicSection, true, { remeasureBasicComposer: true });
     addLine('Loaded blank GCOM starter', 'sys');
     return;
   }
@@ -9336,7 +9365,7 @@ function applySelectedGcomStarter() {
   }
   autoResizeBasicDescription();
   markBasicScriptStructuralDirty();
-  if (basicSection) basicSection.open = true;
+  setSidebarSectionOpen(basicSection, true, { remeasureBasicComposer: true });
   addLine(`Loaded ${profile.label || profileId} starter boilerplate`, 'sys');
 }
 
@@ -9701,7 +9730,7 @@ function applyPresetToUi() {
   builderNameInput.value = diagnosticsPreset.name || '';
   builderCommandsInput.value = diagnosticsPreset.commands.join('\n');
   updateBannerWaitUi(); updateSequenceDelayUi();
-  if (advancedSection) advancedSection.open = true;
+  setSidebarSectionOpen(advancedSection, true);
   updatePresetBox(); updateAdvancedDiagnosticsDirtyState(); updateUrlFromAdvancedDiagnostics();
 }
 
@@ -9770,7 +9799,7 @@ function resetAdvancedDiagnostics() {
   builderNameInput.value = '';
   builderCommandsInput.value = '';
   updateUrlFromAdvancedDiagnostics();
-  if (advancedSection) advancedSection.open = false;
+  setSidebarSectionOpen(advancedSection, false);
   updateBannerWaitUi(); updateSequenceDelayUi(); updatePresetBox(); updateAdvancedDiagnosticsDirtyState();
   currentRun.bannerTimeoutMs = DEFAULT_BANNER_TIMEOUT_MS;
   currentRun.startupResolved = 'not-run';
@@ -10488,6 +10517,7 @@ terminal.addEventListener('scroll', () => {
 });
 window.addEventListener('resize', () => {
   if (!isSidebarResizable()) stopSidebarResize();
+  refreshSidebarScrollArea({ remeasureBasicComposer: Boolean(basicSection?.open) });
   if (autoScroll) scrollTerminalToBottom(true);
 });
 
@@ -10495,6 +10525,12 @@ sidebarResizer.addEventListener('pointerdown', startSidebarResize);
 window.addEventListener('pointermove', updateSidebarResize);
 window.addEventListener('pointerup', stopSidebarResize);
 window.addEventListener('pointercancel', stopSidebarResize);
+
+[advancedSection, basicSection, gcodeSection].forEach(section => {
+  section?.addEventListener('toggle', () => {
+    refreshSidebarScrollArea({ remeasureBasicComposer: section === basicSection && section.open });
+  });
+});
 
 [dtrModeSelect, observeToggle, showRequestResponseToggle, bannerWaitToggle, sequenceDelayToggle, waitMsInput, bannerWaitMsInput, sequenceDelayInput, builderNameInput, builderCommandsInput].forEach(control => {
   control.addEventListener(control === observeToggle || control === showRequestResponseToggle || control === bannerWaitToggle || control === sequenceDelayToggle ? 'change' : 'input', () => {
@@ -11850,7 +11886,7 @@ function aiHandleAction(action, msgEl) {
         if (typeof updateBasicValidationUi === 'function') updateBasicValidationUi();
       }).catch(err => console.error('Validation failed:', err));
     }
-    if (basicSection) basicSection.open = true;
+    setSidebarSectionOpen(basicSection, true, { remeasureBasicComposer: true });
 
     const m = getBasicScriptMeta();
     const varCount = Object.keys(basicLoadedVars || {}).length;
