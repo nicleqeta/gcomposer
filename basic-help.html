@@ -973,172 +973,160 @@
 9000 PRINT "Test cancelled."
 9010 END</code></pre>
     </section>
-
     <section class="card">
-      <h2>13. Example: Distance-Scaled Acceleration Plateau Map</h2>
+      <h2>13. Example: X-Axis Acceleration Throughput Sweep</h2>
       <p>
-        This test answers the question: <em>at what acceleration does my machine stop getting faster for a given move distance?</em>
-        It sweeps the X-axis acceleration setting (<code>$120</code>) upward from <code>{start_accel}</code> in steps of <code>{accel_step}</code> up to a ceiling of <code>{max_accel}</code>,
-        while running a timed batch of back-and-forth moves at each level.
-        The stroke starts at <code>{min_distance}</code>&nbsp;mm and doubles each round — {min_distance}, 2&times;{min_distance}, 4&times;{min_distance}, 8&times;{min_distance}&hellip; up to <code>{max_distance}</code>&nbsp;mm —
-        so you get a curve showing how the best usable acceleration scales with travel distance.
+        This sweeps X acceleration (<code>$120</code>) from <code>{start_accel}</code> upward in steps of
+        <code>{accel_step}</code> at doubling stroke lengths from 1&nbsp;mm through
+        <code>{max_distance}</code>&nbsp;mm — 1, 2, 4, 8, 16 and 32&nbsp;mm by default — running a fixed batch of
+        <code>{batch}</code> back-and-forth passes at each level and timing it. For each distance it stops as
+        soon as throughput stops meaningfully improving (the "plateau"), then moves to the next. The result is
+        a family of throughput curves plus a choice of a fastest-batch or plateau-based <code>$120</code> setting
+        to apply at the end.
       </p>
       <p>
-        For each distance, the script calculates how many passes are needed so the total travel stays close to <code>{target_total_travel}</code>&nbsp;mm,
-        with a minimum of <code>{min_batch_count}</code> passes per batch.
-        Before each batch it writes the new acceleration to <code>$120</code>, then waits <code>{settle_ms}</code>&nbsp;ms for the controller to absorb the change.
-        Each pass issues <strong>two</strong> movement commands (forward, then reverse), so a timed batch sends <code>{{batch_count * 2}}</code> movement commands total, with a guaranteed minimum of <code>{{min_batch_count * 2}}</code> commands.
-        Those commands are streamed with <code>SEND ... BUFFERED</code> and then a single <code>WAIT_IDLE</code> confirms that the final command has been accepted and the machine has actually returned to idle.
+        <strong>What counts as the plateau:</strong> after each charted point the script measures the percentage
+        throughput gain over the previous step. When <code>{plateau_streak}</code> consecutive steps all gain less
+        than <code>{plateau_pct}</code>%, the curve has flattened for that distance and the sweep stops there —
+        higher accelerations aren't tested. Requiring a streak (not one flat step) stops a single noisy reading
+        from ending the sweep early. Past the plateau is the diminishing-returns zone where throughput gains are
+        smaller than the run-to-run noise; that's also where the machine starts to struggle, so it's
+        deliberately left untested. Raise <code>{plateau_pct}</code> to stop sooner, lower it to demand a firmer
+        plateau; set <code>{max_accel}</code> lower as a hard ceiling if you want to guarantee it never tests
+        above a value you already distrust.
       </p>
       <p>
-        The script keeps track of two related values for each distance: the <em>true</em> best batch time seen so far and a separate plateau-reset reference.
-        Any faster batch updates the true best, even if the gain is only a few milliseconds, while the plateau-reset reference only advances when the improvement clears <code>{plateau_ms}</code>&nbsp;ms.
-        It stops testing higher acceleration at that distance once <code>{plateau_consecutive}</code> consecutive steps fail to beat that plateau-reset reference by at least <code>{plateau_ms}</code>&nbsp;ms,
-        which acts as a practical diminishing-returns rule for that stroke length without discarding smaller measured gains.
-        When all distances are done (or the max is reached), <code>$120</code> is restored to its original value.
+        <strong>Reading it:</strong> the short strokes are pure triangular moves that may never reach the
+        <code>$110</code>-derived cruise speed, while the longer strokes have enough travel to expose where
+        acceleration stops materially affecting total time. The test ends the distance sweep when the calculated
+        run-up distance is reached, so the longest completed stroke is the most representative of sustained
+        throughput. Throughput alone doesn't prove the machine executes a given acceleration without losing
+        steps under load; confirm either proposed setting with a real cut and your separate max-rate test. The
+        original <code>$120</code> is restored (or the
+        recommendation applied) at the end, so a run never strands the machine at a high value.
       </p>
-      <p>
-        Timing is measured by wrapping each batch in <code>BENCH START&nbsp;…</code> / <code>BENCH END&nbsp;…</code> markers.
-        The app captures the wall-clock duration and exposes it back to the script via <code>BENCH_LAST_MS()</code>.
-        The Preview window opens automatically on the first marker and switches to <strong>Benchmark</strong> view,
-        where you can watch the acceleration-vs-distance curve build in real time and copy the raw data as JSON for further analysis.
-        Each distance becomes its own series on the chart, with acceleration on the X axis and elapsed batch time on the Y axis.
-        That raw BENCH stream stays unchanged; the per-distance elbow and recommended setting are computed afterward from the measured points rather than by changing the benchmark axis layout.
-      </p>
-      <p>
-        The default <code>{plateau_ms}</code> is deliberately conservative because host-side timing noise, USB latency, and controller-status polling can move a short batch by several milliseconds.
-        If you are testing very short strokes, increase <code>{target_total_travel}</code> and/or <code>{plateau_ms}</code> so the stop condition reacts to a real trend rather than one noisy batch.
-        <code>{plateau_consecutive}</code> controls how many near-flat steps are tolerated before declaring the plateau, and <code>{margin_pct}</code> adds a configurable safety buffer above the measured elbow before the recommended <code>$120</code> is rounded to the nearest 100.
-      </p>
-      <pre><code>; TITLE: Distance-Scaled Acceleration Plateau Map
+      <pre><code>; TITLE: X-Axis Acceleration Throughput Sweep
 ; AUTHOR: GitHub Copilot
-; VERSION: 4
-; DESCRIPTION: Measures repeated X back-and-forth batches at increasing acceleration and doubling stroke lengths from {min_distance} mm up to {max_distance} mm.
-; DESCRIPTION: Each timed batch streams batch_count * 2 movement commands, with a guaranteed minimum of {{min_batch_count * 2}} moves per acceleration test.
-; DESCRIPTION: Uses BENCH markers so the app can time each batch and chart batch duration vs acceleration per distance in the Preview window.
-; DESCRIPTION: Tracks the true fastest batch separately from the plateau-reset reference, then recommends a buffered setting above the measured elbow.
+; VERSION: 10
+; DESCRIPTION: Sweeps $120 from {start_accel} to {max_accel} in {accel_step} steps at doubling stroke lengths from 1 mm up to {max_distance} mm.
+; DESCRIPTION: Feed and cruise ceiling both come from $110 (X max rate) — no separate feed variable. Fixed batch of {batch} passes per step.
+; DESCRIPTION: Stops each distance at the throughput plateau ({plateau_streak} consecutive gains under {plateau_pct}%), and stops the whole sweep once a stroke reaches cruise (run-up = v^2/accel).
 ; VAR start_accel=400
-; VAR accel_step=200
-; VAR max_accel=4000
-; VAR min_distance=1
+; VAR accel_step=400
+; VAR max_accel=8000
+; VAR batch=8
+; VAR settle_ms=50
+; VAR idle_timeout=15000
+; VAR plateau_pct=5
+; VAR plateau_streak=2
 ; VAR max_distance=32
-; VAR x_feed=10000
-; VAR target_total_travel=64
-; VAR min_batch_count=1
-; VAR settle_ms=200
-; VAR idle_timeout=12000
-; VAR plateau_ms=60
-; VAR plateau_consecutive=2
-; VAR margin_pct=10
 
-10 LET proceed = FORM("Distance-Scaled Acceleration Plateau Map\, clear the machine so X can move freely around the current point. Do not switch browser tabs during the test &mdash; tab switching throttles the script timer and will cause false high readings. [Begin Test] [Cancel]", 1, 0)
-20 IF proceed &lt;&gt; 1 THEN GOTO 9000
-30 PRINT "BENCH META x=accel series=distance xlabel=Acceleration (mm/s²) ylabel=Batch Duration (ms) title=Distance-Scaled Acceleration Plateau"
+10 LET proceed = FORM("X-Axis Acceleration Throughput Sweep\, clear the machine so X can move freely around the current point. Do not switch browser tabs during the test — tab switching throttles the timer and causes false readings. [Begin Test] [Cancel]", 1, 0)
+20 IF proceed <> 1 THEN GOTO 9000
+30 PRINT "BENCH META x=accel series=distance y=mm_per_sec xlabel=Acceleration (mm/s²) ylabel=Throughput (mm/sec) title=X-Axis Acceleration Throughput Sweep"
+40 REM Bind all VAR defaults to runtime variables once; reference these bare below.
+41 LET v_start_accel = {start_accel}
+42 LET v_accel_step = {accel_step}
+43 LET v_max_accel = {max_accel}
+44 LET v_batch = {batch}
+46 LET v_settle_ms = {settle_ms}
+47 LET v_idle_timeout = {idle_timeout}
+48 LET v_plateau_pct = {plateau_pct}
+49 LET v_plateau_streak = {plateau_streak}
 50 LET original_accel = SETTING("$120")
-60 LET current_distance = {min_distance}
-70 LET final_best_accel = original_accel
-75 LET final_elbow_accel = original_accel
-78 LET final_recommended_accel = original_accel
-80 LET final_best_ms = 0
-90 SEND "G21" TIMEOUT 1000 REQUIRE_OK
-100 SEND "G91" TIMEOUT 1000 REQUIRE_OK
+51 LET v_max_rate = SETTING("$110")
+52 LET max_x_velocity = v_max_rate / 60
+53 LET v_max_distance = {max_distance}
+54 LET best_mmps = 0
+55 LET best_accel = 0
+56 LET best_dist = 0
+58 LET gain = 0
+59 PRINT "Cruise = $110 = " & v_max_rate & " mm/min (" & ROUND(max_x_velocity, 1) & " mm/s). Moves feed at F" & v_max_rate & "."
+90 STATUS
+92 WAIT v_settle_ms
+94 SEND "G21" TIMEOUT 3000 REQUIRE_OK
+100 SEND "G91" TIMEOUT 3000 REQUIRE_OK
+110 LET current_distance = 1
 
-200 IF current_distance &gt; {max_distance} THEN GOTO 8000
-210 LET batch_count = MAX({min_batch_count}, INT({target_total_travel} / current_distance))
-215 REM batch_count = number of passes per timed batch. {min_batch_count} ensures at least that many passes.
-216 REM Each pass = 1 forward move + 1 backward move. Total moves in batch = batch_count * 2.
-220 LET best_batch_accel = 0
-230 LET best_batch_ms = 0
-235 LET plateau_reset_accel = 0
-236 LET plateau_reset_ms = 0
-240 LET stagnant_steps = 0
-250 PRINT "Distance " &amp; current_distance &amp; " mm with batch_count=" &amp; batch_count
-
-300 FOR test_accel = {start_accel} TO {max_accel} STEP {accel_step}
+200 IF current_distance > v_max_distance THEN GOTO 8000
+210 LET batch_travel = v_batch * 2 * current_distance
+215 LET primed = 0
+216 LET prev_mmps = 0
+217 LET streak = 0
+218 LET plateaued = 0
+219 LET plateau_accel = 0
+220 LET plateau_mmps = 0
+250 PRINT "Distance " & current_distance & " mm, batch=" & v_batch & " (" & batch_travel & " mm per step)"
+300 FOR test_accel = v_start_accel TO v_max_accel STEP v_accel_step
 310 LET current_accel = test_accel
 320 GOSUB 1000
-330 LET current_ms = BENCH_LAST_MS()
-340 PRINT "Measured distance=" &amp; current_distance &amp; " accel=" &amp; current_accel &amp; " ms=" &amp; ROUND(current_ms, 3)
-350 IF best_batch_ms = 0 THEN GOTO 500
-355 IF current_ms &lt;= best_batch_ms THEN GOTO 520
-360 IF current_ms + {plateau_ms} &lt; plateau_reset_ms THEN GOTO 560
-370 LET stagnant_steps = stagnant_steps + 1
-380 IF stagnant_steps &lt; {plateau_consecutive} THEN GOTO 700
-390 PRINT "Plateau reached for distance=" &amp; current_distance &amp; " after " &amp; stagnant_steps &amp; " near-flat steps."
-400 GOTO 800
+330 IF plateaued = 1 THEN GOTO 700
+620 NEXT test_accel
 
-500 LET best_batch_ms = current_ms
-510 LET best_batch_accel = current_accel
-515 LET plateau_reset_ms = current_ms
-516 LET plateau_reset_accel = current_accel
-517 LET stagnant_steps = 0
-518 PRINT "Initial baseline at distance=" &amp; current_distance &amp; " accel=" &amp; best_batch_accel &amp; " batch_ms=" &amp; ROUND(best_batch_ms, 3)
-519 GOTO 700
-
-520 LET best_batch_ms = current_ms
-530 LET best_batch_accel = current_accel
-540 PRINT "New fastest batch at distance=" &amp; current_distance &amp; " accel=" &amp; best_batch_accel &amp; " batch_ms=" &amp; ROUND(best_batch_ms, 3)
-550 IF current_ms + {plateau_ms} &gt;= plateau_reset_ms THEN GOTO 700
-560 LET plateau_reset_ms = current_ms
-570 LET plateau_reset_accel = current_accel
-580 LET stagnant_steps = 0
-590 PRINT "Plateau reset at distance=" &amp; current_distance &amp; " accel=" &amp; plateau_reset_accel &amp; " reset_ms=" &amp; ROUND(plateau_reset_ms, 3)
-
-700 NEXT test_accel
-
-800 LET recommended_accel = INT((((plateau_reset_accel * (100 + {margin_pct})) / 100) + 50) / 100) * 100
-810 PRINT "Best observed acceleration at distance=" &amp; current_distance &amp; " is " &amp; best_batch_accel &amp; " with batch_ms=" &amp; ROUND(best_batch_ms, 3)
-820 PRINT "Measured elbow at distance=" &amp; current_distance &amp; " is " &amp; plateau_reset_accel &amp; "; recommended buffered setting=" &amp; recommended_accel
-830 LET final_best_accel = best_batch_accel
-840 LET final_elbow_accel = plateau_reset_accel
-850 LET final_recommended_accel = recommended_accel
-860 LET final_best_ms = best_batch_ms
+700 IF plateau_accel > 0 THEN GOTO 706
+702 LET plateau_accel = current_accel
+704 LET plateau_mmps = mm_per_sec
+706 LET best_accel = plateau_accel
+708 LET best_mmps = plateau_mmps
+710 LET best_dist = current_distance
+720 PRINT "Distance " & current_distance & " mm: plateau $120=" & plateau_accel & " (" & plateau_mmps & " mm/s)"
+722 LET run_up = (max_x_velocity * max_x_velocity) / plateau_accel
+724 IF current_distance < run_up THEN GOTO 870
+726 PRINT "Cruise reached at " & current_distance & " mm (>= run-up " & ROUND(run_up, 2) & " mm at accel " & plateau_accel & "). Stopping distance sweep."
+728 GOTO 8000
 870 LET current_distance = current_distance * 2
 880 GOTO 200
 
-1000 SEND "$120=" &amp; current_accel TIMEOUT 2000 REQUIRE_OK
-1010 WAIT {settle_ms}
-1020 PRINT "BENCH START distance=" &amp; current_distance &amp; " accel=" &amp; current_accel &amp; " batch=" &amp; batch_count &amp; " repeat=1 feed=" &amp; {x_feed}
-1025 REM Batch loop: each pass performs 2 buffered moves; WAIT_IDLE runs once after the whole batch.
-1030 FOR pass_index = 1 TO batch_count
-1040 SEND "G1 X" &amp; current_distance &amp; " F" &amp; {x_feed} BUFFERED
-1050 SEND "G1 X-" &amp; current_distance &amp; " F" &amp; {x_feed} BUFFERED
+1000 SEND "$120=" & current_accel TIMEOUT 2000 REQUIRE_OK
+1010 WAIT v_settle_ms
+1020 PRINT "BENCH START distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
+1025 LET t0 = CLOCK()
+1030 FOR pass_index = 1 TO v_batch
+1040 SEND "G1 X" & current_distance & " F" & v_max_rate BUFFERED
+1050 SEND "G1 X-" & current_distance & " F" & v_max_rate BUFFERED
 1060 NEXT pass_index
-1070 WAIT_IDLE {idle_timeout}
-1080 PRINT "BENCH END distance=" &amp; current_distance &amp; " accel=" &amp; current_accel &amp; " batch=" &amp; batch_count &amp; " repeat=1 feed=" &amp; {x_feed}
-1090 RETURN
+1070 WAIT_IDLE v_idle_timeout
+1072 LET last_ms = ELAPSED(t0)
+1074 IF last_ms <= 0 THEN GOTO 1085
+1075 IF primed = 0 THEN GOTO 1088
+1078 LET mm_per_sec = ROUND(batch_travel * 1000 / last_ms, 1)
+1080 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate & " mm_per_sec=" & mm_per_sec
+1081 GOSUB 1200
+1082 PRINT "Measured distance=" & current_distance & " accel=" & current_accel & " ms=" & ROUND(last_ms, 1) & " mm_per_sec=" & mm_per_sec
+1084 RETURN
+1085 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
+1086 PRINT "Miss (zero ms) at accel=" & current_accel & "; not charted."
+1087 RETURN
+1088 LET primed = 1
+1089 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
+1090 PRINT "Settling batch (first of distance=" & current_distance & "); not charted."
+1092 RETURN
 
-8000 LET last_distance = current_distance / 2
-8010 LET accel_delta = final_recommended_accel - original_accel
-8020 LET accel_pct = 0
-8030 IF original_accel = 0 THEN GOTO 8050
-8040 LET accel_pct = ROUND((accel_delta / original_accel) * 100, 1)
-8050 PRINT "Summary: longest distance=" &amp; last_distance &amp; " mm. Best observed $120=" &amp; final_best_accel &amp; " with batch_ms=" &amp; ROUND(final_best_ms, 3)
-8055 PRINT "Measured elbow $120=" &amp; final_elbow_accel &amp; ". Recommended buffered $120=" &amp; final_recommended_accel
-8060 PRINT "Previous $120=" &amp; original_accel &amp; " delta=" &amp; accel_delta &amp; " (" &amp; accel_pct &amp; "%)"
-8070 IF accel_delta &gt; 0 THEN GOTO 8100
-8080 IF accel_delta &lt; 0 THEN GOTO 8130
-8090 GOTO 8160
-8100 LET rationale = "Suggested is higher because it adds " &amp; {margin_pct} &amp; "% headroom above the measured elbow. This preserves most of the gain while leaving a practical buffer."
-8110 GOTO 8170
-8130 LET rationale = "Suggested is lower because the measured elbow at the longest stroke was below the current setting. This can improve consistency and reduce stress."
-8140 GOTO 8170
-8160 LET rationale = "Suggested matches previous because the buffered elbow recommendation lands on the existing setting."
-8170 LET apply_accel = INPUT(FORM("Apply $120 update? Previous=" &amp; original_accel &amp; " Suggested=" &amp; final_recommended_accel &amp; " Delta=" &amp; accel_delta &amp; " (" &amp; accel_pct &amp; "%). Longest stroke=" &amp; last_distance &amp; " mm. Best batch=" &amp; ROUND(final_best_ms, 3) &amp; " ms. Elbow=" &amp; final_elbow_accel &amp; ". " &amp; rationale &amp; " [Apply Suggested] [Keep Previous]", final_recommended_accel, original_accel))
-8180 SEND "$120=" &amp; apply_accel TIMEOUT 2000 REQUIRE_OK
-8190 WAIT {settle_ms}
-8200 PRINT "Set $120 = " &amp; apply_accel
-8210 RESULT "applied_x_accel", apply_accel
-8220 RESULT "original_x_accel", original_accel
-8230 RESULT "last_distance_mm", last_distance
-8240 RESULT "last_best_accel", final_best_accel
-8250 RESULT "last_elbow_accel", final_elbow_accel
-8260 RESULT "last_recommended_accel", final_recommended_accel
-8270 RESULT "last_best_batch_ms", ROUND(final_best_ms, 3)
-8280 RESULT "accel_delta", accel_delta
-8290 RESULT "accel_delta_pct", accel_pct
-8300 REPORT
-8310 END
+1200 REM Plateau detector
+1210 IF prev_mmps > 0 THEN GOTO 1220
+1212 LET prev_mmps = mm_per_sec
+1214 RETURN
+1220 LET gain = (mm_per_sec - prev_mmps) / prev_mmps * 100
+1230 LET prev_mmps = mm_per_sec
+1240 IF gain < v_plateau_pct THEN GOTO 1250
+1244 LET streak = 0
+1246 RETURN
+1250 LET streak = streak + 1
+1260 IF streak >= v_plateau_streak THEN GOTO 1270
+1264 RETURN
+1270 LET plateaued = 1
+1272 LET plateau_accel = current_accel
+1274 LET plateau_mmps = mm_per_sec
+1290 PRINT "Plateau at distance=" & current_distance & " accel=" & current_accel & " (gain " & ROUND(gain, 1) & "% for " & v_plateau_streak & " steps)"
+1299 RETURN
+
+8000 PRINT "=== Sweep complete ==="
+8010 PRINT "Sane $120=" & best_accel & " (" & best_mmps & " mm/s on the " & best_dist & " mm stroke) — the plateau, where throughput gains fell below " & v_plateau_pct & "%. Past here is the noisy/diminishing-returns zone, deliberately not tested. Original $120=" & original_accel & "."
+8040 LET apply_accel = FORM("Sweep done. Sane $120=" & best_accel & " (" & best_mmps & " mm/s\, " & best_dist & " mm stroke) — the plateau where gains dropped below " & v_plateau_pct & "%. Higher accelerations were skipped as diminishing-returns/noisy. Confirm with a real cut before trusting it. Apply this\, or keep current? [Apply " & best_accel & "] [Keep " & original_accel & "]", best_accel, original_accel)
+8050 SEND "$120=" & apply_accel TIMEOUT 2000 REQUIRE_OK
+8060 WAIT v_settle_ms
+8070 PRINT "$120 set to " & apply_accel
+8080 END
 
 9000 PRINT "Test cancelled."
 9010 END</code></pre>
