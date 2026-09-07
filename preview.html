@@ -665,7 +665,9 @@ function renderBenchmarkChart(width, height) {
 
     const yLabelValue = (yMax - ((ySpan * tick) / 4)).toFixed(2);
     ctx.fillStyle = '#94a3b8';
-    ctx.fillText(yLabelValue, 12, y + 4);
+    ctx.textAlign = 'right';
+    ctx.fillText(yLabelValue, margin.left - 10, y + 4);
+    ctx.textAlign = 'start';
   }
 
   ctx.textAlign = 'center';
@@ -710,9 +712,10 @@ function renderBenchmarkChart(width, height) {
   });
 
   ctx.save();
-  ctx.translate(18, margin.top + plotHeight / 2 + 40);
+  ctx.translate(16, margin.top + plotHeight / 2);
   ctx.rotate(-Math.PI / 2);
   ctx.fillStyle = '#94a3b8';
+  ctx.textAlign = 'center';
   ctx.fillText(yLabel, 0, 0);
   ctx.restore();
 
