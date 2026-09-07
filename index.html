@@ -1702,7 +1702,8 @@
 
   BENCH MARKERS (emit via PRINT)
   -------------------------------
-  BENCH META key=value ...   Configure benchmark chart metadata/axis mappings.
+  BENCH META key: value      Configure one benchmark chart metadata property.
+  BENCH STYLE y prop: value  Configure marker/line style for one Y field.
   BENCH START key=value ...  Open a timed sample window.
   BENCH END key=value ...    Close sample, capture elapsedMs, update BENCH_LAST_MS().
 
@@ -2433,7 +2434,9 @@ const DEFAULT_BENCHMARK_META = {
   yLabel: 'Elapsed (ms)',
   title: '',
   subtitle: '',
-  description: ''
+  description: '',
+  colorBy: '',
+  styles: {}
 };
 
 function buildTerminalLineDiv(time, arrow, text, type) {
@@ -3112,7 +3115,7 @@ function createBasicBenchmarkCapture(title = 'BASIC Benchmark') {
     latestSample: null,
     samples: [],
     records: [],
-    meta: { ...DEFAULT_BENCHMARK_META },
+    meta: { ...DEFAULT_BENCHMARK_META, styles: { ...DEFAULT_BENCHMARK_META.styles } },
     activeMarkers: new Map()
   };
 }
@@ -3132,7 +3135,9 @@ function applyBasicBenchmarkMeta(capture, fields) {
     ylabel: 'yLabel',
     title: 'title',
     subtitle: 'subtitle',
-    description: 'description'
+    description: 'description',
+    colorby: 'colorBy',
+    colorfield: 'colorBy'
   };
   Object.entries(fields).forEach(([key, value]) => {
     const mapped = map[String(key || '').toLowerCase()];
@@ -3142,6 +3147,25 @@ function applyBasicBenchmarkMeta(capture, fields) {
       capture.title = String(value).trim();
     }
   });
+}
+
+function parseBasicBenchmarkMetaProperty(text) {
+  const match = String(text || '').match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([\s\S]*?)\s*$/);
+  if (!match) return {};
+  return { [match[1].toLowerCase()]: match[2] };
+}
+
+function applyBasicBenchmarkStyle(capture, text) {
+  if (!capture) return false;
+  const match = String(text || '').match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([\s\S]*?)\s*$/);
+  if (!match) return false;
+  const yField = match[1].toLowerCase();
+  const property = match[2].toLowerCase();
+  const value = match[3];
+  if (!['marker', 'line'].includes(property)) return false;
+  if (!capture.meta.styles || typeof capture.meta.styles !== 'object') capture.meta.styles = {};
+  capture.meta.styles[yField] = { ...(capture.meta.styles[yField] || {}), [property]: value };
+  return true;
 }
 
 function parseBasicBenchmarkFields(text) {
@@ -3280,7 +3304,11 @@ function buildBasicBenchmarkSummary(series) {
 
 function buildBasicBenchmarkPreviewData(capture) {
   if (!capture) return null;
-  const meta = { ...DEFAULT_BENCHMARK_META, ...(capture.meta || {}) };
+  const meta = {
+    ...DEFAULT_BENCHMARK_META,
+    ...(capture.meta || {}),
+    styles: { ...DEFAULT_BENCHMARK_META.styles, ...((capture.meta || {}).styles || {}) }
+  };
   const series = Array.isArray(capture.series) && capture.series.length
     ? capture.series
     : buildBasicBenchmarkSeries(capture.samples, meta);
@@ -3353,10 +3381,25 @@ async function recordBasicBenchmarkMessage(message) {
   const text = String(message || '').trim().replace(/^PRINT:\s*/i, '').trim();
   const metaMatch = text.match(/^BENCH\s+META\b\s*(.*)$/i);
   if (metaMatch) {
-    applyBasicBenchmarkMeta(basicBenchmarkCapture, parseBasicBenchmarkFields(metaMatch[1]));
+    applyBasicBenchmarkMeta(basicBenchmarkCapture, parseBasicBenchmarkMetaProperty(metaMatch[1]));
     basicBenchmarkCapture.updatedAtIso = new Date().toISOString();
     if (benchmarkRuntimeWorkerReady) {
       // Keep the worker's capture in sync so it builds series/summary with the right meta
+      const response = await postBenchmarkRuntimeRequest('benchmark-record', {
+        message: text,
+        perfMs: performance.now(),
+        iso: new Date().toISOString()
+      });
+      if (response?.capture) setBasicBenchmarkCaptureFromState(response.capture);
+    }
+    refreshBasicBenchmarkPreview(true);
+    return true;
+  }
+  const styleMatch = text.match(/^BENCH\s+STYLE\b\s*(.*)$/i);
+  if (styleMatch) {
+    if (!applyBasicBenchmarkStyle(basicBenchmarkCapture, styleMatch[1])) return false;
+    basicBenchmarkCapture.updatedAtIso = new Date().toISOString();
+    if (benchmarkRuntimeWorkerReady) {
       const response = await postBenchmarkRuntimeRequest('benchmark-record', {
         message: text,
         perfMs: performance.now(),

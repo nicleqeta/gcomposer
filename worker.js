@@ -700,7 +700,7 @@ Core statements:
   RESULT key, expr | REPORT | END
   CONNECT [BAUD expr] [DTR expr] [WAIT expr] [OBSERVE] | CONNECT WS host [PORT expr] | DISCONNECT
   HOLD | RESUME | STATUS | SOFT_RESET
-  BENCH META key=value ... | BENCH START key=value ... | BENCH END key=value ...
+  BENCH META key: value | BENCH STYLE yField property: value | BENCH START key=value ... | BENCH END key=value ...
 
 Math: ABS INT ROUND(v,d) SQRT SIN COS TAN ASIN ACOS ATAN ATAN2(y,x) RAD DEG RND(max)
   PI MOD(a,b) MIN(a,b) MAX(a,b) CLAMP(v,lo,hi) HYPOT(a,b) LN LOG LOG10 TRUNC SIGN CEIL FLOOR EXP
@@ -721,7 +721,7 @@ Advanced GCOM capabilities:
 - Live controller reads (SETTING("$N"), READ("$N")): Use these to fetch live controller settings and runtime values directly in-script before making decisions. Prefer reads over hardcoded assumptions when values may differ between machines.
 - Pattern matching waits (WAIT_FOR_LINE("pattern", timeoutMs)): Use WAIT_FOR_LINE for connection detection, banner parsing, and response synchronization; pattern supports regex matching. Use explicit timeouts and handle timeout outcomes for robust scripts.
 - Interactive dialogs (FORM(...), INPUT(FORM(...))): Use FORM and INPUT(FORM(...)) for operator confirmations, branch selection, and diagnostic gates before risky actions. This is the preferred pattern for yes/no or multi-choice runtime decisions.
-- Benchmark markers (BENCH META, BENCH START, BENCH END): Use benchmark markers to bracket timed sections and emit structured performance telemetry for analysis. BENCH META should define context before timed runs, then START/END should wrap each measured segment.
+- Benchmark markers (BENCH META, BENCH STYLE, BENCH START, BENCH END): Use benchmark markers to bracket timed sections and emit structured performance telemetry for analysis. BENCH META should define one chart property per line using `BENCH META key: value`; BENCH STYLE can set marker/line style per Y field; START/END should wrap each measured segment.
 - State functions (STATE(), WAIT_STATE "idle", WAIT_IDLE): Use STATE/WAIT_STATE to manage controller state transitions safely, and WAIT_IDLE to confirm queued motion is complete. Prefer state-aware flow control over fixed delays when sequencing machine operations.
 
 CRITICAL SYNTAX RULES (must follow):
@@ -862,8 +862,9 @@ AUTHORING RULES
 - Precision discipline for performance/readability: keep internal math at <= 6 decimal places and round emitted coordinate/feed words in SEND lines to <= 4 decimal places.
 
 BENCH MARKERS
-- BENCH protocol has three marker lines emitted via PRINT: BENCH META, BENCH START, BENCH END.
-- BENCH META sets chart metadata/axis mapping; send it before the first BENCH START.
+- BENCH protocol uses marker lines emitted via PRINT: BENCH META, BENCH STYLE, BENCH START, BENCH END.
+- BENCH META sets one chart metadata/axis mapping per line using `BENCH META key: value`; send it before the first BENCH START.
+- BENCH STYLE sets marker/line style for a Y field using `BENCH STYLE yField property: value`.
 - BENCH_LAST_MS() returns the elapsed ms for the most recently completed BENCH START/END pair.
 
 EXAMPLE QUALITY RULES

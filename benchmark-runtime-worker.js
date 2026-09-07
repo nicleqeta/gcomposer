@@ -14,7 +14,9 @@ const DEFAULT_BENCHMARK_META = {
   yLabel: 'Elapsed (ms)',
   title: '',
   subtitle: '',
-  description: ''
+  description: '',
+  colorBy: '',
+  styles: {}
 };
 
 function applyBenchmarkMeta(capture, fields) {
@@ -32,7 +34,9 @@ function applyBenchmarkMeta(capture, fields) {
     ylabel: 'yLabel',
     title: 'title',
     subtitle: 'subtitle',
-    description: 'description'
+    description: 'description',
+    colorby: 'colorBy',
+    colorfield: 'colorBy'
   };
   Object.entries(fields).forEach(([key, value]) => {
     const mapped = map[String(key || '').toLowerCase()];
@@ -44,6 +48,25 @@ function applyBenchmarkMeta(capture, fields) {
   });
 }
 
+function parseBenchmarkMetaProperty(text) {
+  const match = String(text || '').match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([\s\S]*?)\s*$/);
+  if (!match) return {};
+  return { [match[1].toLowerCase()]: match[2] };
+}
+
+function applyBenchmarkStyle(capture, text) {
+  if (!capture) return false;
+  const match = String(text || '').match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([\s\S]*?)\s*$/);
+  if (!match) return false;
+  const yField = match[1].toLowerCase();
+  const property = match[2].toLowerCase();
+  const value = match[3];
+  if (!['marker', 'line'].includes(property)) return false;
+  if (!capture.meta.styles || typeof capture.meta.styles !== 'object') capture.meta.styles = {};
+  capture.meta.styles[yField] = { ...(capture.meta.styles[yField] || {}), [property]: value };
+  return true;
+}
+
 function createBenchmarkCapture(title = 'BASIC Benchmark') {
   return {
     version: 1,
@@ -53,7 +76,7 @@ function createBenchmarkCapture(title = 'BASIC Benchmark') {
     latestSample: null,
     samples: [],
     activeMarkers: new Map(),
-    meta: { ...DEFAULT_BENCHMARK_META }
+    meta: { ...DEFAULT_BENCHMARK_META, styles: { ...DEFAULT_BENCHMARK_META.styles } }
   };
 }
 
@@ -193,7 +216,11 @@ function buildBenchmarkSummary(series) {
 
 function buildCaptureSnapshot(capture) {
   if (!capture) return null;
-  const meta = { ...DEFAULT_BENCHMARK_META, ...(capture.meta || {}) };
+  const meta = {
+    ...DEFAULT_BENCHMARK_META,
+    ...(capture.meta || {}),
+    styles: { ...DEFAULT_BENCHMARK_META.styles, ...((capture.meta || {}).styles || {}) }
+  };
   const series = buildBenchmarkSeries(capture.samples, meta);
   const summary = buildBenchmarkSummary(series);
   const activeMarkers = capture.activeMarkers instanceof Map
@@ -278,7 +305,13 @@ function recordBenchmarkMessage(message, perfMs, iso) {
   const text = String(message || '').trim().replace(/^PRINT:\s*/i, '').trim();
   const metaMatch = text.match(/^BENCH\s+META\b\s*(.*)$/i);
   if (metaMatch) {
-    applyBenchmarkMeta(benchmarkCapture, parseBenchmarkFields(metaMatch[1]));
+    applyBenchmarkMeta(benchmarkCapture, parseBenchmarkMetaProperty(metaMatch[1]));
+    benchmarkCapture.updatedAtIso = iso || new Date().toISOString();
+    return true;
+  }
+  const styleMatch = text.match(/^BENCH\s+STYLE\b\s*(.*)$/i);
+  if (styleMatch) {
+    if (!applyBenchmarkStyle(benchmarkCapture, styleMatch[1])) return false;
     benchmarkCapture.updatedAtIso = iso || new Date().toISOString();
     return true;
   }

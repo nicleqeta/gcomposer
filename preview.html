@@ -605,6 +605,38 @@ function renderBenchmarkChart(width, height) {
   const plotWidth = Math.max(120, width - margin.left - margin.right);
   const plotHeight = Math.max(120, height - margin.top - margin.bottom);
   const palette = ['#f59e0b', '#60a5fa', '#22c55e', '#ef4444', '#a78bfa', '#14b8a6', '#f97316', '#38bdf8'];
+  const styles = meta.styles && typeof meta.styles === 'object' ? meta.styles : {};
+  const colorBy = String(meta.colorBy || '').trim().toLowerCase();
+  const colorKeys = new Map();
+  const getStyleForYField = yField => styles[String(yField || '').toLowerCase()] || {};
+  const styleEnabled = value => !['0', 'false', 'no', 'off', 'none'].includes(String(value || '').trim().toLowerCase());
+  const getSeriesColor = (item, fallbackIndex) => {
+    const points = Array.isArray(item.points) ? item.points : [];
+    const firstPoint = points[0] || {};
+    const fields = firstPoint.fields || {};
+    const key = colorBy ? String(fields[colorBy] ?? item.name ?? fallbackIndex) : String(item.name ?? fallbackIndex);
+    if (!colorKeys.has(key)) colorKeys.set(key, colorKeys.size);
+    return palette[colorKeys.get(key) % palette.length];
+  };
+  const drawMarker = (x, y, marker, color) => {
+    const shape = String(marker || 'dot').trim().toLowerCase();
+    if (['0', 'false', 'no', 'off', 'none'].includes(shape)) return;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 2;
+    if (shape === 'x' || shape === 'cross') {
+      ctx.beginPath();
+      ctx.moveTo(x - 4, y - 4);
+      ctx.lineTo(x + 4, y + 4);
+      ctx.moveTo(x + 4, y - 4);
+      ctx.lineTo(x - 4, y + 4);
+      ctx.stroke();
+      return;
+    }
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  };
 
   ctx.save();
   ctx.fillStyle = 'rgba(15, 17, 23, 0.94)';
@@ -686,28 +718,31 @@ function renderBenchmarkChart(width, height) {
   ctx.textAlign = 'start';
 
   series.forEach((item, seriesIndex) => {
-    const color = palette[seriesIndex % palette.length];
+    const color = getSeriesColor(item, seriesIndex);
     const points = Array.isArray(item.points) ? item.points : [];
     if (!points.length) return;
+    const yField = points[0]?.yField || '';
+    const style = getStyleForYField(yField);
+    const shouldDrawLine = !Object.prototype.hasOwnProperty.call(style, 'line') || styleEnabled(style.line);
+    const marker = style.marker || 'dot';
 
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2.2;
-    ctx.beginPath();
-    points.forEach((point, index) => {
-      const x = pointX(point.x);
-      const y = pointY(point.y);
-      if (index === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
+    if (shouldDrawLine) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      points.forEach((point, index) => {
+        const x = pointX(point.x);
+        const y = pointY(point.y);
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
 
-    ctx.fillStyle = color;
     points.forEach(point => {
       const x = pointX(point.x);
       const y = pointY(point.y);
-      ctx.beginPath();
-      ctx.arc(x, y, 3, 0, Math.PI * 2);
-      ctx.fill();
+      drawMarker(x, y, marker, color);
     });
   });
 
@@ -717,9 +752,15 @@ function renderBenchmarkChart(width, height) {
     let legendY = margin.top + 14;
     ctx.font = '11px Segoe UI, Arial, sans-serif';
     legendItems.forEach((item, index) => {
-      const color = palette[index % palette.length];
+      const color = getSeriesColor(item, index);
+      const points = Array.isArray(item.points) ? item.points : [];
+      const yField = points[0]?.yField || '';
+      const style = getStyleForYField(yField);
+      const shouldDrawLine = !Object.prototype.hasOwnProperty.call(style, 'line') || styleEnabled(style.line);
+      const marker = style.marker || 'dot';
       ctx.fillStyle = color;
-      ctx.fillRect(legendX, legendY - 8, 10, 2);
+      if (shouldDrawLine) ctx.fillRect(legendX, legendY - 8, 10, 2);
+      drawMarker(legendX + 5, legendY - 7, marker, color);
       ctx.fillStyle = '#cbd5e1';
       ctx.fillText(String(item.name || `Series ${index + 1}`).slice(0, 34), legendX + 16, legendY - 4);
       legendY += 14;

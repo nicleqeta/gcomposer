@@ -751,22 +751,31 @@
       <h2>9. Benchmark Markers</h2>
       <p>
         BENCH markers let a script time arbitrary sections of work and stream live results to the Preview window's Benchmark chart.
-        All three directives are emitted as plain <code>PRINT</code> output — the app intercepts them during script execution.
+        All BENCH directives are emitted as plain <code>PRINT</code> output — the app intercepts them during script execution.
       </p>
-      <h3>BENCH META key=value &hellip;</h3>
+      <h3>BENCH META key: value</h3>
       <p>
-        Sets chart metadata for the current run. Send this once before the first <code>BENCH START</code> to configure how the Preview chart is drawn.
+        Sets one chart metadata property for the current run. Send these before the first <code>BENCH START</code> to configure how the Preview chart is drawn.
         Keys are case-insensitive. Available keys:
       </p>
       <ul>
-        <li><code>title=&hellip;</code> &mdash; chart title shown in the Preview banner.</li>
-        <li><code>subtitle=&hellip;</code> / <code>description=&hellip;</code> &mdash; secondary label text.</li>
-        <li><code>x=fieldName</code> or <code>xfield=fieldName</code> &mdash; which field from <code>BENCH START</code>/<code>END</code> to map on the X axis. Defaults to <code>sampleIndex</code> (1-based order of completed samples).</li>
-        <li><code>y=fieldName</code> or <code>yfield=fieldName</code> &mdash; which field to map on the Y axis. Defaults to <code>elapsedMs</code>. Use a comma-separated list, such as <code>y=throughput,peak</code>, to plot multiple Y fields from each sample on the same chart.</li>
-        <li><code>series=fieldName</code> or <code>seriesfield=fieldName</code> &mdash; field whose value splits samples into named series (one chart line per distinct value). Omit for a single series.</li>
-        <li><code>xlabel=&hellip;</code> &mdash; X axis label shown on the chart.</li>
-        <li><code>ylabel=&hellip;</code> &mdash; Y axis label shown on the chart. Defaults to <code>Elapsed (ms)</code>.</li>
-        <li><code>chart=line</code> or <code>charthint=line</code> &mdash; chart rendering hint (currently only <code>line</code> is supported).</li>
+        <li><code>title: &hellip;</code> &mdash; chart title shown in the Preview banner.</li>
+        <li><code>subtitle: &hellip;</code> / <code>description: &hellip;</code> &mdash; secondary label text.</li>
+        <li><code>x: fieldName</code> or <code>xfield: fieldName</code> &mdash; which field from <code>BENCH START</code>/<code>END</code> to map on the X axis. Defaults to <code>sampleIndex</code> (1-based order of completed samples).</li>
+        <li><code>y: fieldName</code> or <code>yfield: fieldName</code> &mdash; which field to map on the Y axis. Defaults to <code>elapsedMs</code>. Use a comma-separated list, such as <code>y: throughput, peak</code>, to plot multiple Y fields from each sample on the same chart.</li>
+        <li><code>series: fieldName</code> or <code>seriesfield: fieldName</code> &mdash; field whose value splits samples into named series (one chart line per distinct value). Omit for a single series.</li>
+        <li><code>colorby: fieldName</code> &mdash; field whose value controls line and marker colour. This lets multiple Y fields for the same distance share one colour.</li>
+        <li><code>xlabel: &hellip;</code> &mdash; X axis label shown on the chart.</li>
+        <li><code>ylabel: &hellip;</code> &mdash; Y axis label shown on the chart. Defaults to <code>Elapsed (ms)</code>.</li>
+        <li><code>chart: line</code> or <code>charthint: line</code> &mdash; chart rendering hint (currently only <code>line</code> is supported).</li>
+      </ul>
+      <h3>BENCH STYLE yField property: value</h3>
+      <p>
+        Sets display style for one Y field. Available properties:
+      </p>
+      <ul>
+        <li><code>marker: dot</code>, <code>marker: x</code>, or <code>marker: none</code> &mdash; point marker shape.</li>
+        <li><code>line: on</code> or <code>line: off</code> &mdash; whether points for that Y field are connected by a line.</li>
       </ul>
       <h3>BENCH START key=value &hellip;</h3>
       <p>
@@ -795,7 +804,11 @@
 ; VAR idle_timeout=8000
 5 LET go = FORM("Benchmark demo: X will move " &amp; {distance} &amp; " mm at F{x_feed}. Machine must be connected and idle. [Run] [Cancel]", 1, 0)
 8 IF go &lt;&gt; 1 THEN GOTO 9000
-10 PRINT "BENCH META x=accel series=distance xlabel=Acceleration (mm/s²) ylabel=Duration (ms) title=Accel vs Speed"
+10 PRINT "BENCH META title: Accel vs Speed"
+12 PRINT "BENCH META x: accel"
+14 PRINT "BENCH META series: distance"
+16 PRINT "BENCH META xlabel: Acceleration (mm/s²)"
+18 PRINT "BENCH META ylabel: Duration (ms)"
 20 LET accel = {accel}
 30 LET distance = {distance}
 40 PRINT "BENCH START accel=" &amp; accel &amp; " distance=" &amp; distance
@@ -1025,8 +1038,17 @@
 
 10 LET proceed = FORM("X-Axis Acceleration Throughput Sweep\, clear the machine so X can move freely around the current point. Do not switch browser tabs during the test — tab switching throttles the timer and causes false readings. [Begin Test] [Cancel]", 1, 0)
 20 IF proceed <> 1 THEN GOTO 9000
-30 PRINT "BENCH META x=accel series=distance y=mm_per_min,peak_mm_min xlabel=Acceleration (mm/s²) ylabel=Velocity / throughput (mm/min) title=X-Axis Acceleration Throughput Sweep"
-40 REM Bind all VAR defaults to runtime variables once; reference these bare below.
+30 PRINT "BENCH META title: X-Axis Acceleration Throughput Sweep"
+31 PRINT "BENCH META x: accel"
+32 PRINT "BENCH META series: distance"
+33 PRINT "BENCH META y: mm_per_min, peak_mm_min"
+34 PRINT "BENCH META xlabel: Acceleration (mm/s²)"
+35 PRINT "BENCH META ylabel: Velocity / throughput (mm/min)"
+36 PRINT "BENCH META colorby: distance"
+37 PRINT "BENCH STYLE mm_per_min marker: dot"
+38 PRINT "BENCH STYLE mm_per_min line: on"
+39 PRINT "BENCH STYLE peak_mm_min marker: x"
+40 PRINT "BENCH STYLE peak_mm_min line: off"
 41 LET v_start_accel = {start_accel}
 42 LET v_accel_step = {accel_step}
 43 LET v_max_accel = {max_accel}
