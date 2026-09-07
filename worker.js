@@ -721,7 +721,7 @@ Advanced GCOM capabilities:
 - Live controller reads (SETTING("$N"), READ("$N")): Use these to fetch live controller settings and runtime values directly in-script before making decisions. Prefer reads over hardcoded assumptions when values may differ between machines.
 - Pattern matching waits (WAIT_FOR_LINE("pattern", timeoutMs)): Use WAIT_FOR_LINE for connection detection, banner parsing, and response synchronization; pattern supports regex matching. Use explicit timeouts and handle timeout outcomes for robust scripts.
 - Interactive dialogs (FORM(...), INPUT(FORM(...))): Use FORM and INPUT(FORM(...)) for operator confirmations, branch selection, and diagnostic gates before risky actions. This is the preferred pattern for yes/no or multi-choice runtime decisions.
-- Benchmark markers (BENCH META, BENCH STYLE, BENCH START, BENCH END): Use benchmark markers to bracket timed sections and emit structured performance telemetry for analysis. BENCH META should define one chart property per line using `BENCH META key: value`; BENCH STYLE can set marker/line style per Y field; START/END should wrap each measured segment.
+- Benchmark markers (BENCH META, BENCH STYLE, BENCH START, BENCH END): Use benchmark markers to bracket timed sections and emit structured performance telemetry for analysis. BENCH META should define one chart property per line using BENCH META key: value; BENCH STYLE can set marker/line style per Y field; START/END should wrap each measured segment.
 - State functions (STATE(), WAIT_STATE "idle", WAIT_IDLE): Use STATE/WAIT_STATE to manage controller state transitions safely, and WAIT_IDLE to confirm queued motion is complete. Prefer state-aware flow control over fixed delays when sequencing machine operations.
 
 CRITICAL SYNTAX RULES (must follow):
@@ -863,8 +863,8 @@ AUTHORING RULES
 
 BENCH MARKERS
 - BENCH protocol uses marker lines emitted via PRINT: BENCH META, BENCH STYLE, BENCH START, BENCH END.
-- BENCH META sets one chart metadata/axis mapping per line using `BENCH META key: value`; send it before the first BENCH START.
-- BENCH STYLE sets marker/line style for a Y field using `BENCH STYLE yField property: value`.
+- BENCH META sets one chart metadata/axis mapping per line using BENCH META key: value; send it before the first BENCH START.
+- BENCH STYLE sets marker/line style for a Y field using BENCH STYLE yField property: value.
 - BENCH_LAST_MS() returns the elapsed ms for the most recently completed BENCH START/END pair.
 
 EXAMPLE QUALITY RULES
