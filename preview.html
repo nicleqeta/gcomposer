@@ -604,6 +604,7 @@ function renderBenchmarkChart(width, height) {
   const margin = { top: 36, right: 28, bottom: 68, left: 68 };
   const plotWidth = Math.max(120, width - margin.left - margin.right);
   const plotHeight = Math.max(120, height - margin.top - margin.bottom);
+  const palette = ['#f59e0b', '#60a5fa', '#22c55e', '#ef4444', '#a78bfa', '#14b8a6', '#f97316', '#38bdf8'];
 
   ctx.save();
   ctx.fillStyle = 'rgba(15, 17, 23, 0.94)';
@@ -684,7 +685,6 @@ function renderBenchmarkChart(width, height) {
   }
   ctx.textAlign = 'start';
 
-  const palette = ['#f59e0b', '#60a5fa', '#22c55e', '#ef4444', '#a78bfa', '#14b8a6'];
   series.forEach((item, seriesIndex) => {
     const color = palette[seriesIndex % palette.length];
     const points = Array.isArray(item.points) ? item.points : [];
@@ -710,6 +710,21 @@ function renderBenchmarkChart(width, height) {
       ctx.fill();
     });
   });
+
+  const legendItems = series.filter(item => Array.isArray(item.points) && item.points.length).slice(0, 12);
+  if (legendItems.length) {
+    const legendX = margin.left + 10;
+    let legendY = margin.top + 14;
+    ctx.font = '11px Segoe UI, Arial, sans-serif';
+    legendItems.forEach((item, index) => {
+      const color = palette[index % palette.length];
+      ctx.fillStyle = color;
+      ctx.fillRect(legendX, legendY - 8, 10, 2);
+      ctx.fillStyle = '#cbd5e1';
+      ctx.fillText(String(item.name || `Series ${index + 1}`).slice(0, 34), legendX + 16, legendY - 4);
+      legendY += 14;
+    });
+  }
 
   ctx.save();
   ctx.translate(16, margin.top + plotHeight / 2);

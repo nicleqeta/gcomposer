@@ -130,23 +130,41 @@ function buildBenchmarkMarkerKey(fields) {
   return entries.map(([key, value]) => `${key}=${String(value)}`).join('|');
 }
 
+function getBenchmarkYFields(meta) {
+  const raw = String(meta?.yField || 'elapsedMs');
+  const fields = raw.split(',').map(field => field.trim().toLowerCase()).filter(Boolean);
+  return fields.length ? fields : ['elapsedms'];
+}
+
+function formatBenchmarkSeriesName(seriesName, yField, hasMultipleYFields) {
+  if (!hasMultipleYFields) return seriesName;
+  const label = yField === 'elapsedms' ? 'elapsedMs' : yField;
+  return seriesName === 'default' ? label : `${seriesName} ${label}`;
+}
+
 function buildBenchmarkSeries(samples, meta) {
   const groups = new Map();
   const xField = String(meta?.xField || 'sampleIndex').toLowerCase();
-  const yField = String(meta?.yField || 'elapsedMs').toLowerCase();
+  const yFields = getBenchmarkYFields(meta);
+  const hasMultipleYFields = yFields.length > 1;
   const seriesField = String(meta?.seriesField || '').toLowerCase();
 
   samples.forEach((sample, sampleIndex) => {
     const fields = sample.fields || {};
     const xRaw = xField === 'sampleindex' ? (sampleIndex + 1) : fields[xField];
-    const yRaw = yField === 'elapsedms' ? sample.elapsedMs : fields[yField];
     const x = Number(xRaw);
-    const y = Number(yRaw);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    if (!Number.isFinite(x)) return;
 
-    const seriesName = seriesField ? String(fields[seriesField] ?? 'default') : 'default';
-    if (!groups.has(seriesName)) groups.set(seriesName, []);
-    groups.get(seriesName).push({ x, y, sampleIndex, elapsedMs: sample.elapsedMs, fields });
+    const baseSeriesName = seriesField ? String(fields[seriesField] ?? 'default') : 'default';
+    yFields.forEach(yField => {
+      const yRaw = yField === 'elapsedms' ? sample.elapsedMs : fields[yField];
+      const y = Number(yRaw);
+      if (!Number.isFinite(y)) return;
+
+      const seriesName = formatBenchmarkSeriesName(baseSeriesName, yField, hasMultipleYFields);
+      if (!groups.has(seriesName)) groups.set(seriesName, []);
+      groups.get(seriesName).push({ x, y, yField, sampleIndex, elapsedMs: sample.elapsedMs, fields });
+    });
   });
 
   return Array.from(groups.entries()).map(([name, points]) => ({

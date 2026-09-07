@@ -762,7 +762,7 @@
         <li><code>title=&hellip;</code> &mdash; chart title shown in the Preview banner.</li>
         <li><code>subtitle=&hellip;</code> / <code>description=&hellip;</code> &mdash; secondary label text.</li>
         <li><code>x=fieldName</code> or <code>xfield=fieldName</code> &mdash; which field from <code>BENCH START</code>/<code>END</code> to map on the X axis. Defaults to <code>sampleIndex</code> (1-based order of completed samples).</li>
-        <li><code>y=fieldName</code> or <code>yfield=fieldName</code> &mdash; which field to map on the Y axis. Defaults to <code>elapsedMs</code>.</li>
+        <li><code>y=fieldName</code> or <code>yfield=fieldName</code> &mdash; which field to map on the Y axis. Defaults to <code>elapsedMs</code>. Use a comma-separated list, such as <code>y=throughput,peak</code>, to plot multiple Y fields from each sample on the same chart.</li>
         <li><code>series=fieldName</code> or <code>seriesfield=fieldName</code> &mdash; field whose value splits samples into named series (one chart line per distinct value). Omit for a single series.</li>
         <li><code>xlabel=&hellip;</code> &mdash; X axis label shown on the chart.</li>
         <li><code>ylabel=&hellip;</code> &mdash; Y axis label shown on the chart. Defaults to <code>Elapsed (ms)</code>.</li>
@@ -1000,8 +1000,10 @@
         <code>$110</code>-derived cruise speed, while the longer strokes have enough travel to expose where
         acceleration stops materially affecting total time. The test ends the distance sweep when the calculated
         run-up distance is reached, so the longest completed stroke is the most representative of sustained
-        throughput. Throughput alone doesn't prove the machine executes a given acceleration without losing
-        steps under load; confirm the proposed setting with a real cut and your separate max-rate test. The
+        throughput. The chart overlays each measured throughput line with the theoretical peak velocity each
+        stroke can reach at that acceleration, capped by <code>$110</code>. Throughput alone doesn't prove the
+        machine executes a given acceleration without losing steps under load; confirm the proposed setting
+        with a real cut and your separate max-rate test. The
         original <code>$120</code> is restored (or the
         recommendation applied) at the end, so a run never strands the machine at a high value.
       </p>
@@ -1023,7 +1025,7 @@
 
 10 LET proceed = FORM("X-Axis Acceleration Throughput Sweep\, clear the machine so X can move freely around the current point. Do not switch browser tabs during the test — tab switching throttles the timer and causes false readings. [Begin Test] [Cancel]", 1, 0)
 20 IF proceed <> 1 THEN GOTO 9000
-30 PRINT "BENCH META x=accel series=distance y=mm_per_min xlabel=Acceleration (mm/s²) ylabel=Throughput (mm/min) title=X-Axis Acceleration Throughput Sweep"
+30 PRINT "BENCH META x=accel series=distance y=mm_per_min,peak_mm_min xlabel=Acceleration (mm/s²) ylabel=Velocity / throughput (mm/min) title=X-Axis Acceleration Throughput Sweep"
 40 REM Bind all VAR defaults to runtime variables once; reference these bare below.
 41 LET v_start_accel = {start_accel}
 42 LET v_accel_step = {accel_step}
@@ -1041,7 +1043,8 @@
 55 LET best_accel = 0
 56 LET best_dist = 0
 58 LET gain = 0
-59 PRINT "Cruise = $110 = " & v_max_rate & " mm/min (" & ROUND(max_x_velocity, 1) & " mm/s). Moves feed at F" & v_max_rate & "."
+59 LET peak_mm_min = 0
+60 PRINT "Cruise = $110 = " & v_max_rate & " mm/min (" & ROUND(max_x_velocity, 1) & " mm/s). Moves feed at F" & v_max_rate & "."
 90 STATUS
 92 WAIT v_settle_ms
 94 SEND "G21" TIMEOUT 3000 REQUIRE_OK
@@ -1088,9 +1091,10 @@
 1072 LET last_ms = ELAPSED(t0)
 1074 IF last_ms <= 0 THEN GOTO 1085
 1078 LET mm_per_min = ROUND(batch_travel * 60000 / last_ms, 1)
-1080 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate & " mm_per_min=" & mm_per_min
+1079 LET peak_mm_min = ROUND(MIN(v_max_rate, SQRT(current_accel * current_distance) * 60), 1)
+1080 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate & " mm_per_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min
 1081 GOSUB 1200
-1082 PRINT "Measured distance=" & current_distance & " accel=" & current_accel & " ms=" & ROUND(last_ms, 1) & " mm_per_min=" & mm_per_min
+1082 PRINT "Measured distance=" & current_distance & " accel=" & current_accel & " ms=" & ROUND(last_ms, 1) & " throughput_mm_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min
 1084 RETURN
 1085 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
 1086 PRINT "Miss (zero ms) at accel=" & current_accel & "; not charted."
