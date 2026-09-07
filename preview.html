@@ -396,7 +396,9 @@ let timeline = null;
 let commandItems = [];
 let lastActiveCommandId = -1;
 let selectedCommandIds = new Set();
+let selectedBenchmarkSampleIndexes = new Set();
 let lastClickedCommandId = null;
+let lastClickedBenchmarkSampleIndex = null;
 const PREVIEW_MIN_ZOOM = 0.2;
 const PREVIEW_MAX_ZOOM = 6;
 let canvasCssWidth = 1;
@@ -1038,6 +1040,44 @@ function render() {
 
 let _lastCommandListSampleCount = -1;
 
+function formatBenchmarkTapeNumber(value, digits = 1) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return '';
+  return numericValue.toFixed(digits).replace(/\.0$/, '');
+}
+
+function formatBenchmarkTapeSample(sample) {
+  const fields = sample.fields || {};
+  const sampleDistance = Number(fields.distance ?? fields.dist ?? fields.d);
+  const sampleAccel = Number(fields.accel ?? fields.a);
+  const batch = Number(fields.batch ?? fields.cycles ?? fields.passes);
+  const throughput = Number(fields.mm_per_min ?? fields.throughput_mm_min);
+  const peak = Number(fields.peak_mm_min);
+  const elapsed = formatBenchmarkTapeNumber(sample.elapsedMs || 0, 1);
+  const fallbackLabel = [
+    fields.method ? `method=${fields.method}` : '',
+    Number.isFinite(Number(fields.round)) && Number(fields.round) > 0 ? `round=${Number(fields.round)}` : '',
+    Number.isFinite(Number(fields.cmds ?? fields.commands)) && Number(fields.cmds ?? fields.commands) > 0 ? `cmds=${Number(fields.cmds ?? fields.commands)}` : ''
+  ].filter(Boolean).join(' ');
+
+  const head = Number.isFinite(sampleDistance) && Number.isFinite(sampleAccel)
+    ? `${sampleDistance} mm @ ${sampleAccel} accel`
+    : (fallbackLabel || 'Generic benchmark sample');
+  const details = [`${elapsed} ms`];
+
+  if (Number.isFinite(batch) && batch > 0) details.push(`${batch} cycle${batch === 1 ? '' : 's'}`);
+  if (Number.isFinite(sampleDistance) && Number.isFinite(batch) && batch > 0) {
+    details.push(`${formatBenchmarkTapeNumber(batch * 2 * sampleDistance, 2)} mm travel`);
+  }
+  if (Number.isFinite(throughput)) details.push(`${formatBenchmarkTapeNumber(throughput, 1)} mm/min`);
+  if (Number.isFinite(peak)) details.push(`peak ${formatBenchmarkTapeNumber(peak, 1)} mm/min`);
+  if (Number.isFinite(throughput) && Number.isFinite(peak) && peak > 0) {
+    details.push(`avg/peak ${formatBenchmarkTapeNumber((throughput / peak) * 100, 0)}%`);
+  }
+
+  return `${head} | ${details.join(' | ')}`;
+}
+
 function updateCommandListActive(previousCommandId, nextCommandId, shouldScroll = false) {
   if (!commandItems.length) return;
   if (previousCommandId === nextCommandId) return;
@@ -1064,25 +1104,35 @@ function renderCommandList() {
     commandList.innerHTML = '';
     commandItems = [];
     lastActiveCommandId = -1;
-    benchSamples.slice().reverse().forEach(sample => {
+    selectedCommandIds.clear();
+    lastClickedCommandId = null;
+    benchSamples.map((sample, sampleIndex) => ({ sample, sampleIndex })).reverse().forEach(({ sample, sampleIndex }) => {
       const item = document.createElement('li');
       item.className = 'command-item';
-
-      const fields = sample.fields || {};
-      const sampleDistance = Number(fields.distance ?? fields.dist ?? fields.d);
-      const sampleAccel = Number(fields.accel ?? fields.a);
-      const fallbackLabel = [
-        fields.method ? `method=${fields.method}` : '',
-        Number.isFinite(Number(fields.round)) && Number(fields.round) > 0 ? `round=${Number(fields.round)}` : '',
-        Number.isFinite(Number(fields.cmds ?? fields.commands)) && Number(fields.cmds ?? fields.commands) > 0 ? `cmds=${Number(fields.cmds ?? fields.commands)}` : ''
-      ].filter(Boolean).join(' ');
-
-      const head = Number.isFinite(sampleDistance) && Number.isFinite(sampleAccel)
-        ? `${sampleDistance} mm @ ${sampleAccel} accel`
-        : (fallbackLabel || 'Generic benchmark sample');
-      item.textContent = `${head} | ${Number(sample.elapsedMs || 0).toFixed(1)} ms ${Object.keys(fields).slice(0, 4).map(key => `${key}=${fields[key]}`).join(' ')} | ${sample.startedAtIso || 'live'}`;
+      item.dataset.benchmarkSampleIndex = String(sampleIndex);
+      item.textContent = formatBenchmarkTapeSample(sample);
+      item.addEventListener('click', (event) => {
+        selectedCommandIds.clear();
+        if (event.shiftKey && lastClickedBenchmarkSampleIndex != null) {
+          const lo = Math.min(lastClickedBenchmarkSampleIndex, sampleIndex);
+          const hi = Math.max(lastClickedBenchmarkSampleIndex, sampleIndex);
+          for (let id = lo; id <= hi; id += 1) selectedBenchmarkSampleIndexes.add(id);
+        } else if (event.ctrlKey || event.metaKey) {
+          if (selectedBenchmarkSampleIndexes.has(sampleIndex)) selectedBenchmarkSampleIndexes.delete(sampleIndex);
+          else selectedBenchmarkSampleIndexes.add(sampleIndex);
+        } else {
+          selectedBenchmarkSampleIndexes.clear();
+          selectedBenchmarkSampleIndexes.add(sampleIndex);
+        }
+        lastClickedBenchmarkSampleIndex = sampleIndex;
+        refreshSelectedStyles();
+        updateAiContextBar();
+      });
+      commandItems[sampleIndex] = item;
       commandList.appendChild(item);
     });
+    refreshSelectedStyles();
+    updateAiContextBar();
     return;
   }
 
@@ -1090,6 +1140,8 @@ function renderCommandList() {
   commandList.innerHTML = '';
   commandItems = [];
   lastActiveCommandId = -1;
+  selectedBenchmarkSampleIndexes.clear();
+  lastClickedBenchmarkSampleIndex = null;
   if (!timeline.commands.length) return;
 
     updateAiContextBar();
@@ -1268,19 +1320,98 @@ function collectQueueLines(includeNonMotion) {
 function refreshSelectedStyles() {
   commandItems.forEach((item, id) => {
     if (!item) return;
+    const benchmarkSampleIndex = item.dataset.benchmarkSampleIndex != null
+      ? Number(item.dataset.benchmarkSampleIndex)
+      : null;
+    if (Number.isFinite(benchmarkSampleIndex)) {
+      if (selectedBenchmarkSampleIndexes.has(benchmarkSampleIndex)) item.classList.add('selected');
+      else item.classList.remove('selected');
+      return;
+    }
     if (selectedCommandIds.has(id)) item.classList.add('selected');
     else item.classList.remove('selected');
   });
 }
 
 function updateAiContextBar() {
-  const count = selectedCommandIds.size;
-  aiContextCount.textContent = count === 0 ? '0 selected' : `${count} command${count === 1 ? '' : 's'} selected`;
+  const commandCount = selectedCommandIds.size;
+  const sampleCount = selectedBenchmarkSampleIndexes.size;
+  const count = commandCount + sampleCount;
+  if (count === 0) {
+    aiContextCount.textContent = '0 selected';
+  } else if (sampleCount > 0 && commandCount === 0) {
+    aiContextCount.textContent = `${sampleCount} sample${sampleCount === 1 ? '' : 's'} selected`;
+  } else {
+    aiContextCount.textContent = `${commandCount} command${commandCount === 1 ? '' : 's'} selected`;
+  }
   const openerReady = Boolean(window.opener && !window.opener.closed);
   sendToAiBtn.disabled = count === 0 || !openerReady;
 }
 
+function buildBenchmarkSelectionPayload() {
+  const samples = getBenchmarkSamples();
+  if (!timeline || !samples.length || !selectedBenchmarkSampleIndexes.size) return null;
+  const selectedSamples = [...selectedBenchmarkSampleIndexes]
+    .sort((a, b) => a - b)
+    .map(sampleIndex => ({ sampleIndex, sample: samples[sampleIndex] }))
+    .filter(entry => entry.sample);
+  if (!selectedSamples.length) return null;
+
+  const throughputs = selectedSamples
+    .map(entry => Number(entry.sample.fields?.mm_per_min ?? entry.sample.fields?.throughput_mm_min))
+    .filter(Number.isFinite);
+  const peaks = selectedSamples
+    .map(entry => Number(entry.sample.fields?.peak_mm_min))
+    .filter(Number.isFinite);
+  const distances = [...new Set(selectedSamples.map(entry => entry.sample.fields?.distance).filter(value => value != null))];
+  const accels = selectedSamples
+    .map(entry => Number(entry.sample.fields?.accel))
+    .filter(Number.isFinite);
+  const elapsedValues = selectedSamples
+    .map(entry => Number(entry.sample.elapsedMs))
+    .filter(Number.isFinite);
+  const fastest = selectedSamples.reduce((best, entry) => {
+    const throughput = Number(entry.sample.fields?.mm_per_min ?? entry.sample.fields?.throughput_mm_min);
+    if (!Number.isFinite(throughput)) return best;
+    if (!best || throughput > best.throughputMmMin) {
+      return { sampleIndex: entry.sampleIndex, throughputMmMin: throughput, fields: entry.sample.fields || {} };
+    }
+    return best;
+  }, null);
+
+  return {
+    selectionSummary: {
+      selectedBenchmarkSampleCount: selectedSamples.length,
+      selectedBenchmarkSampleIndexes: selectedSamples.map(entry => entry.sampleIndex),
+      selectedDistances: distances,
+      minAccel: accels.length ? Math.min(...accels) : null,
+      maxAccel: accels.length ? Math.max(...accels) : null,
+      note: 'User selected benchmark samples for special attention. Interpret them within the full benchmark series and raw records.'
+    },
+    benchmark: {
+      metadata: timeline.benchmark?.meta || {},
+      summary: getBenchmarkSummary(),
+      selectedSamples: selectedSamples.map(entry => ({
+        sampleIndex: entry.sampleIndex,
+        tapeLabel: formatBenchmarkTapeSample(entry.sample),
+        ...entry.sample
+      })),
+      selectedTape: selectedSamples.map(entry => formatBenchmarkTapeSample(entry.sample)),
+      fastestSelectedSample: fastest,
+      selectedStats: {
+        avgThroughputMmMin: throughputs.length ? Math.round((throughputs.reduce((sum, value) => sum + value, 0) / throughputs.length) * 10) / 10 : null,
+        maxThroughputMmMin: throughputs.length ? Math.max(...throughputs) : null,
+        maxPeakMmMin: peaks.length ? Math.max(...peaks) : null,
+        avgElapsedMs: elapsedValues.length ? Math.round((elapsedValues.reduce((sum, value) => sum + value, 0) / elapsedValues.length) * 10) / 10 : null
+      }
+    },
+    scriptTitle: timeline.title || 'Untitled',
+    scriptSource: String(timeline.scriptSource || '').split('\n').slice(0, 150).join('\n')
+  };
+}
+
 function buildAiSelectionPayload() {
+  if (selectedBenchmarkSampleIndexes.size) return buildBenchmarkSelectionPayload();
   if (!timeline || !timeline.commands) return null;
   const sourceLines = String(timeline.scriptSource || '').split('\n');
   const gcomLineToPhysicalIndex = new Map();

@@ -7838,7 +7838,9 @@ window.addEventListener('message', event => {
     if (sel && typeof aiSetContext === 'function') {
       aiSetContext(sel);
       if (!aiSidebarOpen && typeof aiSetOpen === 'function') aiSetOpen(true);
-      addLine(`AI Agent: selection context received (${(sel.commands || []).length} command(s))`, 'sys');
+      const benchmarkSamples = sel.selectionSummary?.selectedBenchmarkSampleCount || 0;
+      const commandCount = (sel.commands || []).length;
+      addLine(`AI Agent: selection context received (${benchmarkSamples ? `${benchmarkSamples} benchmark sample(s)` : `${commandCount} command(s)`})`, 'sys');
     }
     return;
   }
@@ -12164,10 +12166,13 @@ function aiSetContext(payload) {
   }
   const cmds = (aiSelectionContext.commands || []).length;
   const segs = (aiSelectionContext.segments || []).length;
+  const benchmarkSamples = aiSelectionContext.selectionSummary?.selectedBenchmarkSampleCount || 0;
   const geo  = aiSelectionContext.geometric || {};
   const dist = typeof geo.totalDistanceMm === 'number' ? geo.totalDistanceMm.toFixed(1) + 'mm' : null;
   const minL = geo.minSourceLine, maxL = geo.maxSourceLine;
-  let chips = '<span class="ai-context-chip">' + cmds + ' cmd' + (cmds !== 1 ? 's' : '') + '</span>';
+  let chips = benchmarkSamples
+    ? '<span class="ai-context-chip">' + benchmarkSamples + ' benchmark sample' + (benchmarkSamples !== 1 ? 's' : '') + '</span>'
+    : '<span class="ai-context-chip">' + cmds + ' cmd' + (cmds !== 1 ? 's' : '') + '</span>';
   if (segs) chips += '<span class="ai-context-chip">' + segs + ' seg' + (segs !== 1 ? 's' : '') + '</span>';
   if (minL) chips += '<span class="ai-context-chip">L' + minL + (maxL && maxL !== minL ? '&ndash;' + maxL : '') + '</span>';
   if (dist) chips += '<span class="ai-context-chip">' + dist + '</span>';
