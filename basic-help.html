@@ -1007,7 +1007,7 @@
       </p>
       <pre><code>; TITLE: X-Axis Acceleration Throughput Sweep
 ; AUTHOR: GitHub Copilot
-; VERSION: 10
+; VERSION: 11
 ; DESCRIPTION: Sweeps $120 from {start_accel} to {max_accel} in {accel_step} steps at doubling stroke lengths from 1 mm up to {max_distance} mm.
 ; DESCRIPTION: Feed and cruise ceiling both come from $110 (X max rate) — no separate feed variable. Fixed batch of {batch} passes per step.
 ; DESCRIPTION: Stops each distance at the throughput plateau ({plateau_streak} consecutive gains under {plateau_pct}%), and stops the whole sweep once a stroke reaches cruise (run-up = v^2/accel).
@@ -1050,7 +1050,6 @@
 
 200 IF current_distance > v_max_distance THEN GOTO 8000
 210 LET batch_travel = v_batch * 2 * current_distance
-215 LET primed = 0
 216 LET prev_mmps = 0
 217 LET streak = 0
 218 LET plateaued = 0
@@ -1088,7 +1087,6 @@
 1070 WAIT_IDLE v_idle_timeout
 1072 LET last_ms = ELAPSED(t0)
 1074 IF last_ms <= 0 THEN GOTO 1085
-1075 IF primed = 0 THEN GOTO 1088
 1078 LET mm_per_sec = ROUND(batch_travel * 1000 / last_ms, 1)
 1080 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate & " mm_per_sec=" & mm_per_sec
 1081 GOSUB 1200
@@ -1097,10 +1095,6 @@
 1085 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
 1086 PRINT "Miss (zero ms) at accel=" & current_accel & "; not charted."
 1087 RETURN
-1088 LET primed = 1
-1089 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
-1090 PRINT "Settling batch (first of distance=" & current_distance & "); not charted."
-1092 RETURN
 
 1200 REM Plateau detector
 1210 IF prev_mmps > 0 THEN GOTO 1220
