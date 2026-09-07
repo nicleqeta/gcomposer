@@ -1012,9 +1012,9 @@
 ; DESCRIPTION: Feed and cruise ceiling both come from $110 (X max rate) — no separate feed variable. Fixed batch of {batch} passes per step.
 ; DESCRIPTION: Stops each distance at the throughput plateau ({plateau_streak} consecutive gains under {plateau_pct}%), and stops the whole sweep once a stroke reaches cruise (run-up = v^2/accel).
 ; VAR start_accel=400
-; VAR accel_step=400
+; VAR accel_step=250
 ; VAR max_accel=8000
-; VAR batch=8
+; VAR batch=4
 ; VAR settle_ms=50
 ; VAR idle_timeout=15000
 ; VAR plateau_pct=5

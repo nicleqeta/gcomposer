@@ -646,6 +646,13 @@ function renderBenchmarkChart(width, height) {
 
   const pointX = x => margin.left + ((Number(x) - xMin) / xSpan) * plotWidth;
   const pointY = y => margin.top + plotHeight - ((Number(y) - yMin) / ySpan) * plotHeight;
+  const formatAxisTick = value => {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return '';
+    if (Math.abs(numericValue) >= 100) return numericValue.toFixed(0);
+    if (Math.abs(numericValue) >= 10) return numericValue.toFixed(1).replace(/\.0$/, '');
+    return numericValue.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+  };
 
   ctx.strokeStyle = 'rgba(148, 163, 184, 0.12)';
   ctx.lineWidth = 1;
@@ -660,6 +667,20 @@ function renderBenchmarkChart(width, height) {
     ctx.fillStyle = '#94a3b8';
     ctx.fillText(yLabelValue, 12, y + 4);
   }
+
+  ctx.textAlign = 'center';
+  for (let tick = 0; tick <= 4; tick += 1) {
+    const x = margin.left + (plotWidth * tick) / 4;
+    ctx.beginPath();
+    ctx.moveTo(x, margin.top);
+    ctx.lineTo(x, margin.top + plotHeight);
+    ctx.stroke();
+
+    const xLabelValue = formatAxisTick(xMin + ((xSpan * tick) / 4));
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillText(xLabelValue, x, margin.top + plotHeight + 18);
+  }
+  ctx.textAlign = 'start';
 
   const palette = ['#f59e0b', '#60a5fa', '#22c55e', '#ef4444', '#a78bfa', '#14b8a6'];
   series.forEach((item, seriesIndex) => {
