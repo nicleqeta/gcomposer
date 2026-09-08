@@ -3636,11 +3636,19 @@ function syncCommandPrompt() {
 }
 
 function substituteVars(program, vars) {
-  let result = program;
-  for (const [key, value] of Object.entries(vars)) {
-    result = result.replaceAll(`{${key}}`, value);
-  }
-  return result;
+  const source = String(program || '');
+  const lines = source.split('\n');
+  const substituted = lines.map(line => {
+    // BENCH RECORDS templates keep their {field} braces — they are
+    // resolved at render time from sample fields, not script vars.
+    if (/^\s*\d+\s+PRINT\s+"BENCH\s+RECORDS\b/i.test(line)) return line;
+    let result = line;
+    for (const [key, value] of Object.entries(vars)) {
+      result = result.replaceAll(`{${key}}`, value);
+    }
+    return result;
+  });
+  return substituted.join('\n');
 }
 
 function buildBasicDescriptionEvalVars(vars) {
