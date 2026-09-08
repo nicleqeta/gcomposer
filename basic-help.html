@@ -1080,8 +1080,8 @@
 42 PRINT "BENCH RECORDS {_elapsed} ms"
 43 PRINT "BENCH RECORDS {batch} cycles"
 44 PRINT "BENCH RECORDS {travel} mm travel"
-45 PRINT "BENCH RECORDS {mm_per_min} mm/min"
-46 PRINT "BENCH RECORDS peak velocity {peak_mm_s} mm/s"
+45 PRINT "BENCH RECORDS avg velocity {mm_per_min} mm/min"
+46 PRINT "BENCH RECORDS peak velocity {peak_mm_min} mm/min"
 47 PRINT "BENCH RECORDS ramp-up {ramp_up_mm} mm"
 48 LET v_start_accel = {start_accel}
 49 LET v_accel_step = {accel_step}
@@ -1148,9 +1148,8 @@
 1074 IF last_ms <= 0 THEN GOTO 1095
 1078 LET mm_per_min = ROUND(batch_travel * 60000 / last_ms, 1)
 1079 LET peak_mm_min = ROUND(MIN(v_max_rate, SQRT(current_accel * current_distance) * 60), 1)
-1083 LET peak_mm_s = ROUND(peak_mm_min / 60, 1)
-1085 LET ramp_up_mm = ROUND(peak_mm_s * peak_mm_s / (2 * current_accel), 2)
-1086 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate & " mm_per_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min & " peak_mm_s=" & peak_mm_s & " ramp_up_mm=" & ramp_up_mm
+1085 LET ramp_up_mm = ROUND(peak_mm_min * peak_mm_min / 3600 / (2 * current_accel), 2)
+1086 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate & " mm_per_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min & " ramp_up_mm=" & ramp_up_mm
 1087 GOSUB 1200
 1088 PRINT "Measured distance=" & current_distance & " accel=" & current_accel & " ms=" & ROUND(last_ms, 1) & " throughput_mm_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min
 1090 RETURN
