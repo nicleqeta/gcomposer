@@ -782,6 +782,7 @@
         <li><code>{_elapsed}</code> (app-measured ms) and <code>{_sampleIndex}</code> (1-based sample order) are built-in fields; script field names must not start with <code>_</code>.</li>
         <li>If any field in a segment is missing or non-numeric, that whole segment is dropped from the record.</li>
         <li>Remaining segments are joined with <code>|</code> at render time.</li>
+        <li>Fields referenced only in <code>BENCH RECORDS</code> templates are resolved from sample data at render time and do <em>not</em> need <code>; VAR</code> declarations &mdash; they are excluded from the Variables list and share-link overrides.</li>
       </ul>
       <pre><code>; Tape record definition (plain field references only)
 30 PRINT "BENCH RECORDS {distance} mm @ {accel} accel"

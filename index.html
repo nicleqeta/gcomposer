@@ -3635,13 +3635,41 @@ function syncCommandPrompt() {
   termInputShell.classList.toggle('focused', connected && document.activeElement === cmdInput);
 }
 
+// BENCH RECORDS template lines keep their {field} braces — they are
+// resolved at render time from sample fields, not script vars.
+function isBenchTemplateLine(line) {
+  return /^\s*\d+\s+PRINT\s+"BENCH\s+RECORDS\b/i.test(String(line || ''));
+}
+
+// App-provided render fields (e.g. {_elapsed}) are never script vars.
+function isBenchRenderFieldName(name) {
+  return /^_/.test(String(name || ''));
+}
+
+// Names referenced ONLY inside BENCH RECORDS template lines (and not
+// elsewhere in the program or description) — render-time fields, not vars.
+function collectBenchOnlyTemplateNames(programText = '') {
+  const source = String(programText || '');
+  if (!source) return new Set();
+  const benchNames = new Set();
+  const otherNames = new Set();
+  for (const line of source.split('\n')) {
+    const targets = isBenchTemplateLine(line) ? benchNames : otherNames;
+    BASIC_IMPORT_PLACEHOLDER_RE.lastIndex = 0;
+    let match;
+    while ((match = BASIC_IMPORT_PLACEHOLDER_RE.exec(line)) !== null) {
+      if (!isBenchRenderFieldName(match[1])) targets.add(match[1]);
+    }
+  }
+  const benchOnly = new Set([...benchNames].filter(name => !otherNames.has(name)));
+  return benchOnly;
+}
+
 function substituteVars(program, vars) {
   const source = String(program || '');
   const lines = source.split('\n');
   const substituted = lines.map(line => {
-    // BENCH RECORDS templates keep their {field} braces — they are
-    // resolved at render time from sample fields, not script vars.
-    if (/^\s*\d+\s+PRINT\s+"BENCH\s+RECORDS\b/i.test(line)) return line;
+    if (isBenchTemplateLine(line)) return line;
     let result = line;
     for (const [key, value] of Object.entries(vars)) {
       result = result.replaceAll(`{${key}}`, value);
@@ -4900,7 +4928,11 @@ function renderVarEditor(vars = basicLoadedVars) {
   basicLoadedVars = { ...nextVars };
   basicVarsList.innerHTML = '';
 
-  const entries = Object.entries(nextVars);
+  // Safety net for scripts saved before BENCH RECORDS fields were excluded:
+  // hide vars that are referenced only inside BENCH RECORDS template lines.
+  const benchOnlyNames = collectBenchOnlyTemplateNames(basicRawProgram);
+
+  const entries = Object.entries(nextVars).filter(([key]) => !benchOnlyNames.has(key));
   if (!entries.length) {
     const empty = document.createElement('div');
     empty.className = 'basic-empty-vars';
@@ -5045,12 +5077,17 @@ function deriveBasicImportTitle(fileName = '') {
   return trimmed.replace(/\.[^.]+$/, '').trim();
 }
 
-function collectBasicImportPlaceholders(text = '') {
+function collectBasicImportPlaceholders(text = '', { skipBenchTemplates = false } = {}) {
   const names = new Set();
   let match;
   BASIC_IMPORT_PLACEHOLDER_RE.lastIndex = 0;
-  while ((match = BASIC_IMPORT_PLACEHOLDER_RE.exec(String(text || ''))) !== null) {
-    names.add(match[1]);
+  const lines = String(text || '').split('\n');
+  for (const line of lines) {
+    if (skipBenchTemplates && isBenchTemplateLine(line)) continue;
+    BASIC_IMPORT_PLACEHOLDER_RE.lastIndex = 0;
+    while ((match = BASIC_IMPORT_PLACEHOLDER_RE.exec(line)) !== null) {
+      if (!isBenchRenderFieldName(match[1])) names.add(match[1]);
+    }
   }
   return names;
 }
@@ -5126,7 +5163,8 @@ function parseBasicImportText(text, fileName = '') {
 
   const placeholderNames = new Set([
     ...collectBasicImportPlaceholders(meta.description),
-    ...collectBasicImportPlaceholders(meta.programText)
+    // BENCH RECORDS template fields are render-time sample fields, not vars.
+    ...collectBasicImportPlaceholders(meta.programText, { skipBenchTemplates: true })
   ]);
 
   placeholderNames.forEach(name => {
@@ -11942,9 +11980,10 @@ function aiHandleAction(action, msgEl) {
     }
 
     // Enforce explicit VAR declarations for every placeholder referenced by description or program.
+    // BENCH RECORDS template fields are render-time sample fields and are exempt.
     const referenced = new Set([
       ...collectBasicImportPlaceholders(candidatePackage.description || ''),
-      ...collectBasicImportPlaceholders(candidatePackage.programText || '')
+      ...collectBasicImportPlaceholders(candidatePackage.programText || '', { skipBenchTemplates: true })
     ]);
     const definedVarNames = new Set(Object.keys(candidatePackage.vars || {}));
     const missingVarDefs = [...referenced].filter(name => !definedVarNames.has(name));
