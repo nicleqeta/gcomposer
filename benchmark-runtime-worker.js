@@ -54,6 +54,18 @@ function parseBenchmarkMetaProperty(text) {
   return { [match[1].toLowerCase()]: match[2] };
 }
 
+function applyBenchmarkRecords(capture, text) {
+  if (!capture) return false;
+  const body = String(text ?? '');
+  if (/^CLEAR\b/i.test(body.trim())) {
+    capture.recordTemplates = [];
+    return true;
+  }
+  if (!Array.isArray(capture.recordTemplates)) capture.recordTemplates = [];
+  capture.recordTemplates.push(body);
+  return true;
+}
+
 function applyBenchmarkStyle(capture, text) {
   if (!capture) return false;
   const match = String(text || '').match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([\s\S]*?)\s*$/);
@@ -76,7 +88,8 @@ function createBenchmarkCapture(title = 'BASIC Benchmark') {
     latestSample: null,
     samples: [],
     activeMarkers: new Map(),
-    meta: { ...DEFAULT_BENCHMARK_META, styles: { ...DEFAULT_BENCHMARK_META.styles } }
+    meta: { ...DEFAULT_BENCHMARK_META, styles: { ...DEFAULT_BENCHMARK_META.styles } },
+    recordTemplates: []
   };
 }
 
@@ -221,6 +234,7 @@ function buildCaptureSnapshot(capture) {
     ...(capture.meta || {}),
     styles: { ...DEFAULT_BENCHMARK_META.styles, ...((capture.meta || {}).styles || {}) }
   };
+  const recordTemplates = Array.isArray(capture.recordTemplates) ? [...capture.recordTemplates] : [];
   const series = buildBenchmarkSeries(capture.samples, meta);
   const summary = buildBenchmarkSummary(series);
   const activeMarkers = capture.activeMarkers instanceof Map
@@ -239,6 +253,7 @@ function buildCaptureSnapshot(capture) {
     latestSample: capture.latestSample ? { ...capture.latestSample } : null,
     samples: capture.samples.map(sample => ({ ...sample })),
     records: capture.samples.map(sample => ({ ...sample })),
+    recordTemplates,
     meta,
     series,
     summary,
@@ -306,6 +321,12 @@ function recordBenchmarkMessage(message, perfMs, iso) {
   const metaMatch = text.match(/^BENCH\s+META\b\s*(.*)$/i);
   if (metaMatch) {
     applyBenchmarkMeta(benchmarkCapture, parseBenchmarkMetaProperty(metaMatch[1]));
+    benchmarkCapture.updatedAtIso = iso || new Date().toISOString();
+    return true;
+  }
+  const recordsMatch = text.match(/^BENCH\s+RECORDS\b\s*([\s\S]*)$/i);
+  if (recordsMatch) {
+    if (!applyBenchmarkRecords(benchmarkCapture, recordsMatch[1])) return false;
     benchmarkCapture.updatedAtIso = iso || new Date().toISOString();
     return true;
   }

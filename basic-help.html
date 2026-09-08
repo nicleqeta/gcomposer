@@ -769,6 +769,33 @@
         <li><code>ylabel: &hellip;</code> &mdash; Y axis label shown on the chart. Defaults to <code>Elapsed (ms)</code>.</li>
         <li><code>chart: line</code> or <code>charthint: line</code> &mdash; chart rendering hint (currently only <code>line</code> is supported).</li>
       </ul>
+      <h3>BENCH RECORDS template</h3>
+      <p>
+        Declares how each completed sample is rendered as a pipe-separated record in the Preview sample list
+        and in the AI selection payload. Each <code>BENCH RECORDS</code> line adds one segment template.
+        Templates are run-global (like <code>BENCH META</code>); lines accumulate, and
+        <code>BENCH RECORDS CLEAR</code> resets them. If no templates are declared, the app falls back to its
+        built-in default label format.
+      </p>
+      <ul>
+        <li>Templates contain plain <code>{fieldname}</code> references only &mdash; no expressions or conditionals. Compute derived values in the script with <code>LET</code> and include them on the <code>BENCH END</code> line.</li>
+        <li><code>{_elapsed}</code> (app-measured ms) and <code>{_sampleIndex}</code> (1-based sample order) are built-in fields; script field names must not start with <code>_</code>.</li>
+        <li>If any field in a segment is missing or non-numeric, that whole segment is dropped from the record.</li>
+        <li>Remaining segments are joined with <code>|</code> at render time.</li>
+      </ul>
+      <pre><code>; Tape record definition (plain field references only)
+30 PRINT "BENCH RECORDS {distance} mm @ {accel} accel"
+31 PRINT "BENCH RECORDS {_elapsed} ms"
+32 PRINT "BENCH RECORDS {batch} cycles"
+33 PRINT "BENCH RECORDS {travel} mm travel"
+34 PRINT "BENCH RECORDS {mm_per_min} mm/min"
+35 PRINT "BENCH RECORDS peak {peak_mm_min} mm/min"
+36 PRINT "BENCH RECORDS {avg_peak_pct}% of peak"
+
+; Derived values computed in the script and emitted on BENCH END
+1080 LET travel_mm = batch * 2 * distance
+1081 LET avg_peak_pct = ROUND(mm_per_min / peak_mm_min * 100, 0)
+1082 PRINT "BENCH END distance=" &amp; distance &amp; " accel=" &amp; accel &amp; " batch=" &amp; batch &amp; " travel=" &amp; travel_mm &amp; " mm_per_min=" &amp; mm_per_min &amp; " peak_mm_min=" &amp; peak_mm_min &amp; " avg_peak_pct=" &amp; avg_peak_pct</code></pre>
       <h3>BENCH STYLE yField property: value</h3>
       <p>
         Sets display style for one Y field. Available properties:
@@ -1022,7 +1049,7 @@
       </p>
       <pre><code>; TITLE: X-Axis Acceleration Throughput Sweep
 ; AUTHOR: NicholasL
-; VERSION: 11
+; VERSION: 12
 ; DESCRIPTION: Sweeps $120 from {start_accel} to {max_accel} in {accel_step} steps at doubling stroke lengths from 1 mm up to {max_distance} mm.
 ; DESCRIPTION: Feed and cruise ceiling both come from $110 (X max rate) — no separate feed variable. Fixed batch of {batch} passes per step.
 ; DESCRIPTION: Stops each distance at the throughput plateau ({plateau_streak} consecutive gains under {plateau_pct}%), and stops the whole sweep once a stroke reaches cruise (run-up = v^2/accel).
@@ -1049,24 +1076,31 @@
 38 PRINT "BENCH STYLE mm_per_min line: on"
 39 PRINT "BENCH STYLE peak_mm_min marker: dot"
 40 PRINT "BENCH STYLE peak_mm_min line: off"
-41 LET v_start_accel = {start_accel}
-42 LET v_accel_step = {accel_step}
-43 LET v_max_accel = {max_accel}
-44 LET v_batch = {batch}
-46 LET v_settle_ms = {settle_ms}
-47 LET v_idle_timeout = {idle_timeout}
-48 LET v_plateau_pct = {plateau_pct}
-49 LET v_plateau_streak = {plateau_streak}
-50 LET original_accel = SETTING("$120")
-51 LET v_max_rate = SETTING("$110")
-52 LET max_x_velocity = v_max_rate / 60
-53 LET v_max_distance = {max_distance}
-54 LET best_mm_min = 0
-55 LET best_accel = 0
-56 LET best_dist = 0
-58 LET gain = 0
-59 LET peak_mm_min = 0
-60 PRINT "Cruise = $110 = " & v_max_rate & " mm/min (" & ROUND(max_x_velocity, 1) & " mm/s). Moves feed at F" & v_max_rate & "."
+41 PRINT "BENCH RECORDS {distance} mm @ {accel} accel"
+42 PRINT "BENCH RECORDS {_elapsed} ms"
+43 PRINT "BENCH RECORDS {batch} cycles"
+44 PRINT "BENCH RECORDS {travel} mm travel"
+45 PRINT "BENCH RECORDS {mm_per_min} mm/min"
+46 PRINT "BENCH RECORDS peak velocity {peak_mm_s} mm/s"
+47 PRINT "BENCH RECORDS ramp-up {ramp_up_mm} mm"
+48 LET v_start_accel = {start_accel}
+49 LET v_accel_step = {accel_step}
+50 LET v_max_accel = {max_accel}
+51 LET v_batch = {batch}
+52 LET v_settle_ms = {settle_ms}
+53 LET v_idle_timeout = {idle_timeout}
+54 LET v_plateau_pct = {plateau_pct}
+55 LET v_plateau_streak = {plateau_streak}
+56 LET original_accel = SETTING("$120")
+57 LET v_max_rate = SETTING("$110")
+58 LET max_x_velocity = v_max_rate / 60
+59 LET v_max_distance = {max_distance}
+60 LET best_mm_min = 0
+61 LET best_accel = 0
+62 LET best_dist = 0
+63 LET gain = 0
+64 LET peak_mm_min = 0
+65 PRINT "Cruise = $110 = " & v_max_rate & " mm/min (" & ROUND(max_x_velocity, 1) & " mm/s). Moves feed at F" & v_max_rate & "."
 90 STATUS
 92 WAIT v_settle_ms
 94 SEND "G21" TIMEOUT 3000 REQUIRE_OK
@@ -1111,16 +1145,18 @@
 1060 NEXT pass_index
 1070 WAIT_IDLE v_idle_timeout
 1072 LET last_ms = ELAPSED(t0)
-1074 IF last_ms <= 0 THEN GOTO 1085
+1074 IF last_ms <= 0 THEN GOTO 1095
 1078 LET mm_per_min = ROUND(batch_travel * 60000 / last_ms, 1)
 1079 LET peak_mm_min = ROUND(MIN(v_max_rate, SQRT(current_accel * current_distance) * 60), 1)
-1080 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate & " mm_per_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min
-1081 GOSUB 1200
-1082 PRINT "Measured distance=" & current_distance & " accel=" & current_accel & " ms=" & ROUND(last_ms, 1) & " throughput_mm_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min
-1084 RETURN
-1085 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
-1086 PRINT "Miss (zero ms) at accel=" & current_accel & "; not charted."
-1087 RETURN
+1083 LET peak_mm_s = ROUND(peak_mm_min / 60, 1)
+1085 LET ramp_up_mm = ROUND(peak_mm_s * peak_mm_s / current_accel, 2)
+1086 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate & " mm_per_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min & " peak_mm_s=" & peak_mm_s & " ramp_up_mm=" & ramp_up_mm
+1087 GOSUB 1200
+1088 PRINT "Measured distance=" & current_distance & " accel=" & current_accel & " ms=" & ROUND(last_ms, 1) & " throughput_mm_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min
+1090 RETURN
+1095 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
+1096 PRINT "Miss (zero ms) at accel=" & current_accel & "; not charted."
+1097 RETURN
 
 1200 REM Plateau detector
 1210 IF prev_mm_min > 0 THEN GOTO 1220

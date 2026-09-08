@@ -1078,6 +1078,46 @@ function formatBenchmarkTapeSample(sample) {
   return `${head} | ${details.join(' | ')}`;
 }
 
+// Built-in (app-provided) fields usable in BENCH RECORDS templates via {_name}
+function getBenchmarkTapeBuiltins(sample, sampleIndex) {
+  return {
+    elapsed: formatBenchmarkTapeNumber(sample.elapsedMs || 0, 1),
+    sampleIndex: Number.isFinite(Number(sampleIndex)) ? Number(sampleIndex) + 1 : ''
+  };
+}
+
+// Render a sample's tape label from BENCH RECORDS templates.
+// Plain {field} substitution only; a segment whose fields are missing/NaN is dropped.
+function renderBenchmarkTapeLabel(sample, sampleIndex, templates) {
+  if (!Array.isArray(templates) || !templates.length) {
+    return formatBenchmarkTapeSample(sample);
+  }
+  const fields = sample.fields || {};
+  const builtins = getBenchmarkTapeBuiltins(sample, sampleIndex);
+  const parts = [];
+  for (const template of templates) {
+    let missing = false;
+    const rendered = String(template).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name) => {
+      const value = name.startsWith('_')
+        ? builtins[name.slice(1).toLowerCase()]
+        : fields[name.toLowerCase()];
+      if (value === undefined || value === null || value === '' || !Number.isFinite(Number(value))) {
+        missing = true;
+        return '';
+      }
+      return String(value);
+    });
+    if (!missing && rendered.trim()) parts.push(rendered.trim());
+  }
+  return parts.length ? parts.join(' | ') : formatBenchmarkTapeSample(sample);
+}
+
+// Resolve the active BENCH RECORDS templates from the timeline benchmark data
+function getBenchmarkRecordTemplates() {
+  const templates = timeline?.benchmark?.recordTemplates;
+  return Array.isArray(templates) ? templates : [];
+}
+
 function updateCommandListActive(previousCommandId, nextCommandId, shouldScroll = false) {
   if (!commandItems.length) return;
   if (previousCommandId === nextCommandId) return;
@@ -1110,7 +1150,7 @@ function renderCommandList() {
       const item = document.createElement('li');
       item.className = 'command-item';
       item.dataset.benchmarkSampleIndex = String(sampleIndex);
-      item.textContent = formatBenchmarkTapeSample(sample);
+      item.textContent = renderBenchmarkTapeLabel(sample, sampleIndex, getBenchmarkRecordTemplates());
       item.addEventListener('click', (event) => {
         selectedCommandIds.clear();
         if (event.shiftKey && lastClickedBenchmarkSampleIndex != null) {
@@ -1393,10 +1433,10 @@ function buildBenchmarkSelectionPayload() {
       summary: getBenchmarkSummary(),
       selectedSamples: selectedSamples.map(entry => ({
         sampleIndex: entry.sampleIndex,
-        tapeLabel: formatBenchmarkTapeSample(entry.sample),
+        tapeLabel: renderBenchmarkTapeLabel(entry.sample, entry.sampleIndex, getBenchmarkRecordTemplates()),
         ...entry.sample
       })),
-      selectedTape: selectedSamples.map(entry => formatBenchmarkTapeSample(entry.sample)),
+      selectedTape: selectedSamples.map(entry => renderBenchmarkTapeLabel(entry.sample, entry.sampleIndex, getBenchmarkRecordTemplates())),
       fastestSelectedSample: fastest,
       selectedStats: {
         avgThroughputMmMin: throughputs.length ? Math.round((throughputs.reduce((sum, value) => sum + value, 0) / throughputs.length) * 10) / 10 : null,
