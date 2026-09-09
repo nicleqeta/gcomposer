@@ -514,7 +514,7 @@
         <li><code>CONFIRM expr</code>: Show confirmation dialog. If canceled, script stops.</li>
         <li><code>PAUSE</code>: Pause script until resumed.</li>
         <li><code>RESULT name, expr</code>: Save a named result value.</li>
-        <li><code>REPORT</code>: Print all saved results.</li>
+        <li><code>REPORT</code>: Print all saved results, followed by a <em>Checks</em> block listing every <code>VERIFY</code> check outcome — see <em>Section&nbsp;8: Expression Functions</em>.</li>
         <li><code>stmtA : stmtB</code>: Statement chaining on one numbered line. Execution is left-to-right; colons inside quoted strings are ignored.</li>
       </ul>
       <pre><code>10 LET speed = 1200
@@ -529,11 +529,12 @@
       <h2>7. Program Flow</h2>
       <ul>
         <li><code>FOR name = start TO end [STEP step]</code> and <code>NEXT [name]</code>: Counter loop with optional explicit step.</li>
-        <li><code>IF condition THEN GOTO line</code>: Conditional jump. Also accepts <code>IF cond THEN LET</code>, <code>IF cond THEN PRINT</code>, <code>IF cond THEN GOSUB</code>, and <code>IF cond THEN END</code> as single-line inline statements.</li>
+        <li><code>IF condition THEN GOTO line</code>: Conditional jump. Also accepts <code>IF cond THEN LET</code>, <code>IF cond THEN PRINT</code>, <code>IF cond THEN GOSUB</code>, <code>IF cond THEN VERIFY</code>, and <code>IF cond THEN END</code> as single-line inline statements.</li>
         <li><code>GOTO line</code>: Unconditional jump.</li>
         <li><code>GOSUB line</code> and <code>RETURN</code>: Subroutine call/return.</li>
         <li><code>END</code>: Stop script.</li>
       </ul>
+      <p>For self-marking checks with automatic counting and reporting, use <code>VERIFY</code> — see <em>Section&nbsp;8: Expression Functions</em>.</p>
       <pre><code>10 LET sum = 0
 20 FOR i = 1 TO 5
 30 LET sum = sum + i
@@ -597,154 +598,66 @@
         <li><code>ELAPSED(t0)</code>: Milliseconds elapsed since <code>t0</code> (a value previously captured by <code>CLOCK()</code>). Returns a number so it can be used in further math.</li>
         <li><code>FORMAT_MS(ms)</code>: Format a millisecond number as a human-readable string — <code>"456 ms"</code> or <code>"1.23 s"</code>. Returns a string; use only inside <code>PRINT</code> or string concatenation.</li>
       </ul>
+      <h3>VERIFY — Self-Marking Checks</h3>
+      <p>
+        <code>VERIFY</code> evaluates a condition (same grammar as <code>IF</code> conditions) and records the outcome
+        under a quoted <em>label</em>. Passing checks are counted silently; failing checks are counted and highlighted.
+        All named checks appear automatically in a <em>Checks</em> block when <code>REPORT</code> runs.
+      </p>
+      <ul>
+        <li><code>VERIFY expr, "label"</code>: Check, record, and continue regardless of outcome.</li>
+        <li><code>VERIFY expr, "label" HALT</code>: Check and record, then stop the script immediately if the check fails. Use for preconditions that must hold before continuing (e.g. machine Idle before motion).</li>
+        <li><code>VERIFY expr, "label" ASK</code>: Check and record, then on failure show a dialog where the operator chooses Continue or Cancel Script. Not suitable for unattended runs.</li>
+        <li><code>PASS_COUNT</code> / <code>FAIL_COUNT</code>: Read-only variables derived from the recorded checks. They cannot be assigned with <code>LET</code>.</li>
+        <li><code>VERIFY</code> also works inline: <code>IF cond THEN VERIFY other_cond, "label"</code>.</li>
+      </ul>
+      <p>
+        Use <code>VERIFY</code> for verifiable outcomes and <code>IF ... THEN PRINT</code> for observations that are
+        informational rather than right-or-wrong.
+      </p>
       <p>This deterministic script self-marks expected versus actual results. It uses one fabricated sentence for simple string functions, then a canned status line for <code>SPLIT_COUNT</code>, <code>SPLIT_PART</code>, and <code>SPLIT_INTO</code> parsing checks.</p>
       <pre><code>; TITLE: Section 8 - Expression Functions Self-Marking Test
-; VERSION: 1.0
-; DESCRIPTION: Deterministic self-marking example with two inputs.
-; DESCRIPTION: Uses a canned sentence for simple string functions and a canned status line for parser checks.
-; DESCRIPTION: Success means fail_count = 0 and FINAL RESULT: PASS is printed.
+; VERSION: 2.0
+; DESCRIPTION: Deterministic self-marking test of the expression functions.
+; DESCRIPTION: Each check is a VERIFY - failures are counted, recorded, and listed by REPORT.
+; DESCRIPTION: Success means FAIL_COUNT = 0 and FINAL RESULT: PASS.
 ; VAR expected_state=Idle
-; VAR expected_min_fields=8
+; VAR expected_sentence_len=28
 ; VAR expected_x=0.000
 ; VAR expected_y=0.000
 ; VAR expected_z=5.000
-; VAR expected_sentence_len=28
-10 LET pass_count = 0
-20 LET fail_count = 0
-30 PRINT "Starting Section 8 self-marking test..."
-40 LET sentence = "The cow jumped over the moon"
-50 LET sentence_len = LEN(sentence)
-60 IF sentence_len = {expected_sentence_len} THEN GOTO 90
-70 LET fail_count = fail_count + 1
-80 PRINT "ASSERT FAIL sentence_len expected=" & {expected_sentence_len} & " actual=" & sentence_len
-85 GOTO 110
-90 LET pass_count = pass_count + 1
-100 PRINT "ASSERT PASS sentence_len expected=" & {expected_sentence_len} & " actual=" & sentence_len
-110 LET has_cow = CONTAINS(sentence, "cow")
-120 IF has_cow = 1 THEN GOTO 150
-130 LET fail_count = fail_count + 1
-140 PRINT "ASSERT FAIL contains_cow expected=1 actual=" & has_cow
-145 GOTO 170
-150 LET pass_count = pass_count + 1
-160 PRINT "ASSERT PASS contains_cow expected=1 actual=" & has_cow
-170 LET starts_the = STARTS_WITH(sentence, "The")
-180 IF starts_the = 1 THEN GOTO 210
-190 LET fail_count = fail_count + 1
-200 PRINT "ASSERT FAIL starts_with_The expected=1 actual=" & starts_the
-205 GOTO 230
-210 LET pass_count = pass_count + 1
-220 PRINT "ASSERT PASS starts_with_The expected=1 actual=" & starts_the
-230 LET ends_moon = ENDS_WITH(sentence, "moon")
-240 IF ends_moon = 1 THEN GOTO 270
-250 LET fail_count = fail_count + 1
-260 PRINT "ASSERT FAIL ends_with_moon expected=1 actual=" & ends_moon
-265 GOTO 290
-270 LET pass_count = pass_count + 1
-280 PRINT "ASSERT PASS ends_with_moon expected=1 actual=" & ends_moon
-290 LET second_word = SPLIT_PART(sentence, " ", 2, "")
-300 IF second_word = "cow" THEN GOTO 330
-310 LET fail_count = fail_count + 1
-320 PRINT "ASSERT FAIL split_part_word2 expected=cow actual=" & second_word
-325 GOTO 350
-330 LET pass_count = pass_count + 1
-340 PRINT "ASSERT PASS split_part_word2 expected=cow actual=" & second_word
-350 LET replaced_sentence = REPLACE(sentence, "cow", "owl")
-360 IF replaced_sentence = "The owl jumped over the moon" THEN GOTO 390
-370 LET fail_count = fail_count + 1
-380 PRINT "ASSERT FAIL replace_sentence expected=The owl jumped over the moon actual=" & replaced_sentence
-385 GOTO 410
-390 LET pass_count = pass_count + 1
-400 PRINT "ASSERT PASS replace_sentence expected=The owl jumped over the moon actual=" & replaced_sentence
-410 LET upper_sentence = UPPER(sentence)
-420 IF upper_sentence = "THE COW JUMPED OVER THE MOON" THEN GOTO 450
-430 LET fail_count = fail_count + 1
-440 PRINT "ASSERT FAIL upper_sentence expected=THE COW JUMPED OVER THE MOON actual=" & upper_sentence
-445 GOTO 470
-450 LET pass_count = pass_count + 1
-460 PRINT "ASSERT PASS upper_sentence expected=THE COW JUMPED OVER THE MOON actual=" & upper_sentence
-470 LET lower_sentence = LOWER(sentence)
-480 IF lower_sentence = "the cow jumped over the moon" THEN GOTO 510
-490 LET fail_count = fail_count + 1
-500 PRINT "ASSERT FAIL lower_sentence expected=the cow jumped over the moon actual=" & lower_sentence
-505 GOTO 530
-510 LET pass_count = pass_count + 1
-520 PRINT "ASSERT PASS lower_sentence expected=the cow jumped over the moon actual=" & lower_sentence
-530 LET status = "&lt;Idle|MPos:0.000,0.000,5.000|Bf:35,7680|FS:0,0|Pn:P|CL:0,100|PS:2,1|ER:0,0&gt;"
-540 LET clean = TRIM(status)
-550 LET split_count = SPLIT_COUNT(clean, "|")
-560 LET token_count = SPLIT_INTO(clean, "|", "fld")
-570 IF split_count = token_count THEN GOTO 600
-580 LET fail_count = fail_count + 1
-590 PRINT "ASSERT FAIL split_count_match expected=" & split_count & " actual=" & token_count
-595 GOTO 620
-600 LET pass_count = pass_count + 1
-610 PRINT "ASSERT PASS split_count_match expected=" & split_count & " actual=" & token_count
-620 LET state_raw = SPLIT_PART(clean, "|", 1, "UNKNOWN")
-630 LET parsed_state = REPLACE(state_raw, "&lt;", "")
-640 LET parsed_state = REPLACE(parsed_state, ">", "")
-650 IF parsed_state = "{expected_state}" THEN GOTO 680
-660 LET fail_count = fail_count + 1
-670 PRINT "ASSERT FAIL parsed_state expected={expected_state} actual=" & parsed_state
-675 GOTO 700
-680 LET pass_count = pass_count + 1
-690 PRINT "ASSERT PASS parsed_state expected={expected_state} actual=" & parsed_state
-700 IF token_count &gt;= {expected_min_fields} THEN GOTO 730
-710 LET fail_count = fail_count + 1
-720 PRINT "ASSERT FAIL token_count expected&gt;=" & {expected_min_fields} & " actual=" & token_count
-725 GOTO 750
-730 LET pass_count = pass_count + 1
-740 PRINT "ASSERT PASS token_count expected&gt;=" & {expected_min_fields} & " actual=" & token_count
-750 LET pos_field = SPLIT_PART(clean, "|", 2, "")
-760 LET pos_type = SPLIT_PART(pos_field, ":", 1, "")
-770 LET pos_values = SPLIT_PART(pos_field, ":", 2, "")
-780 LET pos_is_mpos = 0
-790 LET pos_is_wpos = 0
-800 IF pos_type = "MPos" THEN LET pos_is_mpos = 1
-810 IF pos_type = "WPos" THEN LET pos_is_wpos = 1
-820 LET pos_type_ok = pos_is_mpos + pos_is_wpos
-830 IF pos_type_ok &gt; 0 THEN GOTO 860
-840 LET fail_count = fail_count + 1
-850 PRINT "ASSERT FAIL pos_type expected=MPos|WPos actual=" & pos_type
-855 GOTO 880
-860 LET pass_count = pass_count + 1
-870 PRINT "ASSERT PASS pos_type expected=MPos|WPos actual=" & pos_type
-880 LET parsed_x = SPLIT_PART(pos_values, ",", 1, "")
-882 LET parsed_y = SPLIT_PART(pos_values, ",", 2, "")
-884 LET parsed_z = SPLIT_PART(pos_values, ",", 3, "")
-890 IF parsed_x = "{expected_x}" THEN GOTO 920
-900 LET fail_count = fail_count + 1
-910 PRINT "ASSERT FAIL parsed_x expected={expected_x} actual=" & parsed_x
-915 GOTO 940
-920 LET pass_count = pass_count + 1
-930 PRINT "ASSERT PASS parsed_x expected={expected_x} actual=" & parsed_x
-940 IF parsed_y = "{expected_y}" THEN GOTO 970
-950 LET fail_count = fail_count + 1
-960 PRINT "ASSERT FAIL parsed_y expected={expected_y} actual=" & parsed_y
-965 GOTO 990
-970 LET pass_count = pass_count + 1
-980 PRINT "ASSERT PASS parsed_y expected={expected_y} actual=" & parsed_y
-990 IF parsed_z = "{expected_z}" THEN GOTO 1020
-1000 LET fail_count = fail_count + 1
-1010 PRINT "ASSERT FAIL parsed_z expected={expected_z} actual=" & parsed_z
-1015 GOTO 1040
-1020 LET pass_count = pass_count + 1
-1030 PRINT "ASSERT PASS parsed_z expected={expected_z} actual=" & parsed_z
-1040 PRINT "Summary: pass_count=" & pass_count & " fail_count=" & fail_count
-1050 RESULT "pass_count", pass_count
-1060 RESULT "fail_count", fail_count
-1070 RESULT "sentence_len", sentence_len
-1080 RESULT "parsed_state", parsed_state
-1090 RESULT "field_count", token_count
-1100 RESULT "parsed_x", parsed_x
-1110 RESULT "parsed_y", parsed_y
-1120 RESULT "parsed_z", parsed_z
-1130 REPORT
-1140 IF fail_count = 0 THEN GOTO 9900
-1150 GOTO 9000
-9000 PRINT "FINAL RESULT: FAIL"
-9010 END
-9900 PRINT "FINAL RESULT: PASS"
-9910 END</code></pre>
+10 PRINT "Starting Section 8 self-marking test..."
+20 LET sentence = "The cow jumped over the moon"
+30 VERIFY LEN(sentence) = {expected_sentence_len}, "sentence_len"
+40 VERIFY CONTAINS(sentence, "cow") = 1, "contains_cow"
+50 VERIFY STARTS_WITH(sentence, "The") = 1, "starts_with_The"
+60 VERIFY ENDS_WITH(sentence, "moon") = 1, "ends_with_moon"
+70 VERIFY SPLIT_PART(sentence, " ", 2, "") = "cow", "split_part_word2"
+80 VERIFY REPLACE(sentence, "cow", "owl") = "The owl jumped over the moon", "replace_sentence"
+90 VERIFY UPPER(sentence) = "THE COW JUMPED OVER THE MOON", "upper_sentence"
+100 VERIFY LOWER(sentence) = "the cow jumped over the moon", "lower_sentence"
+110 LET status = "&lt;Idle|MPos:0.000,0.000,5.000|Bf:35,7680|FS:0,0|Pn:P|CL:0,100|PS:2,1|ER:0,0&gt;"
+120 VERIFY CONTAINS(status, "MPos") = 1, "fixture_status_shape" HALT
+130 LET clean = TRIM(status)
+140 LET token_count = SPLIT_INTO(clean, "|", "fld")
+150 VERIFY SPLIT_COUNT(clean, "|") = token_count, "split_count_match"
+160 VERIFY SPLIT_PART(clean, "|", 1, "") = "&lt;" &amp; {expected_state}, "parsed_state"
+170 VERIFY token_count &gt;= 8, "field_count_min"
+180 LET pos_type = SPLIT_PART(SPLIT_PART(clean, "|", 2, ""), ":", 1, "")
+190 LET pos_ok = (pos_type = "MPos") + (pos_type = "WPos")
+200 VERIFY pos_ok &gt; 0, "pos_type"
+210 LET pos_values = SPLIT_PART(SPLIT_PART(clean, "|", 2, ""), ":", 2, "")
+220 VERIFY SPLIT_PART(pos_values, ",", 1, "") = "{expected_x}", "parsed_x"
+230 VERIFY SPLIT_PART(pos_values, ",", 2, "") = "{expected_y}", "parsed_y"
+240 VERIFY SPLIT_PART(pos_values, ",", 3, "") = "{expected_z}", "parsed_z"
+250 VERIFY CONTAINS(clean, "Bf:") = 1, "bf_fields_present" ASK
+260 IF CONTAINS(clean, "Pn:") = 1 THEN PRINT "NOTE: Pn: pin field active - input pin state reported"
+270 RESULT "tokens_parsed", token_count
+280 PRINT "Summary: " &amp; PASS_COUNT &amp; " passed, " &amp; FAIL_COUNT &amp; " failed"
+290 REPORT
+300 IF FAIL_COUNT = 0 THEN PRINT "FINAL RESULT: PASS"
+310 IF FAIL_COUNT &gt; 0 THEN PRINT "FINAL RESULT: FAIL"
+320 END</code></pre>
     </section>
 
     <section class="card">

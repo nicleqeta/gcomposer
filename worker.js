@@ -697,7 +697,7 @@ Core statements:
   FOR var = start TO end [STEP n] ... NEXT [var]
   GOSUB line ... RETURN
   LET var = SETTING("$N") | LET var = READ("$N")
-  RESULT key, expr | REPORT | END
+  VERIFY condition, "label" [HALT|ASK] | RESULT key, expr | REPORT | END
   CONNECT [BAUD expr] [DTR expr] [WAIT expr] [OBSERVE] | CONNECT WS host [PORT expr] | DISCONNECT
   HOLD | RESUME | STATUS | SOFT_RESET
   BENCH META key: value | BENCH STYLE yField property: value | BENCH START key=value ... | BENCH END key=value ...
@@ -721,6 +721,7 @@ Advanced GCOM capabilities:
 - Live controller reads (SETTING("$N"), READ("$N")): Use these to fetch live controller settings and runtime values directly in-script before making decisions. Prefer reads over hardcoded assumptions when values may differ between machines.
 - Pattern matching waits (WAIT_FOR_LINE("pattern", timeoutMs)): Use WAIT_FOR_LINE for connection detection, banner parsing, and response synchronization; pattern supports regex matching. Use explicit timeouts and handle timeout outcomes for robust scripts.
 - Interactive dialogs (FORM(...), INPUT(FORM(...))): Use FORM and INPUT(FORM(...)) for operator confirmations, branch selection, and diagnostic gates before risky actions. This is the preferred pattern for yes/no or multi-choice runtime decisions.
+- Verification checks (VERIFY): Use VERIFY to self-mark expected vs actual values in diagnostic and conformance scripts. Each check is named by a quoted label; PASS/FAIL outcomes are counted automatically and listed by REPORT in a Checks block. Read-only counters PASS_COUNT and FAIL_COUNT summarize outcomes (never LET-assign them). Add HALT to make a failing check stop the script — use it for preconditions that must hold before motion (e.g. VERIFY STATE() = "Idle", "machine_idle" HALT). Add ASK to show an operator dialog on failure (continue or cancel) — do not use ASK in unattended benchmark scripts. VERIFY can also be used inline: IF cond THEN VERIFY cond2, "label".
 - Benchmark markers (BENCH META, BENCH STYLE, BENCH START, BENCH END): Use benchmark markers to bracket timed sections and emit structured performance telemetry for analysis. BENCH META should define one chart property per line using BENCH META key: value; BENCH STYLE can set marker/line style per Y field; START/END should wrap each measured segment.
 - State functions (STATE(), WAIT_STATE "idle", WAIT_IDLE): Use STATE/WAIT_STATE to manage controller state transitions safely, and WAIT_IDLE to confirm queued motion is complete. Prefer state-aware flow control over fixed delays when sequencing machine operations.
 
@@ -799,7 +800,8 @@ GCOM CANONICAL RULES
 Source: basic-help.html distilled manifest
 
 PROGRAM FLOW
-- Supported flow control: FOR/NEXT, IF ... THEN GOTO, IF ... THEN LET, IF ... THEN PRINT, IF ... THEN GOSUB, IF ... THEN END, GOTO, GOSUB, RETURN, END.
+- Supported flow control: FOR/NEXT, IF ... THEN GOTO, IF ... THEN LET, IF ... THEN PRINT, IF ... THEN GOSUB, IF ... THEN VERIFY, IF ... THEN END, GOTO, GOSUB, RETURN, END.
+- VERIFY expr, "label" [HALT|ASK]: named self-marking check. Counted automatically; labels appear in REPORT Checks block. PASS_COUNT/FAIL_COUNT are read-only. HALT stops the script on failure (use for preconditions before motion); ASK shows an operator dialog on failure (not for unattended runs).
 - Unsupported flow control: WHILE, WEND, ENDWHILE, DO/LOOP, O-codes, macro variables.
 
 VARIABLES AND HEADERS

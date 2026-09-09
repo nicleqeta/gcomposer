@@ -2802,6 +2802,7 @@ let basicConfirmResolver = null;
 let basicFormResolver = null;
 let basicVars = {};
 let basicResults = new Map();
+let basicChecks = new Map();   // VERIFY check registry: label -> { status, actual, line }
 let basicCallStack = [];
 let basicForStack = [];
 let basicGrblSettings = {};   // cache of $N=value from READ/SETTING
@@ -4372,6 +4373,103 @@ function basicFindTopLevelComma(text) {
   return -1;
 }
 
+// Find the first top-level comma in text — respecting string literals AND paren depth,
+// so commas inside function calls like CONTAINS(a, b) don't split the argument list.
+function basicFindTopLevelCommaOutsideParens(text) {
+  let inString = false;
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const ch = text[index];
+    if (ch === '"' && text[index - 1] !== '\\') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === '(' || ch === '[') depth += 1;
+    else if (ch === ')' || ch === ']') depth -= 1;
+    else if (depth === 0 && ch === ',') return index;
+  }
+  return -1;
+}
+
+// Parse a VERIFY statement body: "<conditionExpr>, \"<label>\" [HALT|ASK]".
+// The condition is a full comparison expression (same grammar as IF conditions).
+// The label is a quoted string naming the check; it keys the basicChecks registry.
+// Trailing bare keyword HALT stops the script on failure; ASK shows a confirm dialog.
+// Returns { conditionExpr, actualExpr, label, mode, error } where actualExpr is the
+// right-hand side of the top-level comparison (for reporting the actual value), or null.
+function basicParseVerifyOptions(verifyBody) {
+  const body = String(verifyBody || '').trim();
+  if (!body) return { error: 'VERIFY requires "<condition>, \"<label>\""' };
+
+  let mode = 'COUNT';
+  let work = body;
+
+  // Detect trailing bare keyword HALT or ASK (outside string literals).
+  const trailingKeyword = (text, keyword) => {
+    const upper = String(keyword).toUpperCase();
+    let inStr = false;
+    let idx = -1;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === '"' && text[i - 1] !== '\\') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (!/\s/.test(ch)) continue;
+      const rest = text.slice(i + 1).trimStart();
+      if (!rest.toUpperCase().startsWith(upper)) continue;
+      const after = rest.slice(upper.length);
+      if (after && !/^\s*$/.test(after)) continue;
+      idx = i + 1;
+    }
+    return idx;
+  };
+
+  const haltIndex = trailingKeyword(work, 'HALT');
+  const askIndex = trailingKeyword(work, 'ASK');
+  if (haltIndex !== -1 && askIndex !== -1) {
+    return { error: 'VERIFY cannot combine HALT and ASK' };
+  }
+  if (haltIndex !== -1) {
+    mode = 'HALT';
+    work = work.slice(0, haltIndex).trim();
+  } else if (askIndex !== -1) {
+    mode = 'ASK';
+    work = work.slice(0, askIndex).trim();
+  }
+
+  const commaIndex = basicFindTopLevelCommaOutsideParens(work);
+  if (commaIndex === -1) {
+    return { error: 'VERIFY requires "<condition>, \"<label>\""' };
+  }
+  const conditionExpr = work.slice(0, commaIndex).trim();
+  let labelToken = work.slice(commaIndex + 1).trim();
+  if (!conditionExpr) return { error: 'VERIFY condition expression is empty' };
+
+  const labelM = labelToken.match(/^"([^"]*)"$/);
+  if (!labelM || !labelM[1]) {
+    return { error: 'VERIFY label must be a non-empty quoted string, e.g. "my_check"' };
+  }
+  const label = labelM[1].trim();
+
+  // Extract the right-hand side of the top-level comparison for actual-value reporting.
+  const condOps = ['<=', '>=', '<>', '<', '>', '='];
+  let inStr = false;
+  let actualExpr = null;
+  for (let i = 0; i < conditionExpr.length; i++) {
+    if (conditionExpr[i] === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    for (const op of condOps) {
+      if (conditionExpr.slice(i, i + op.length) === op) {
+        actualExpr = conditionExpr.slice(i + op.length).trim();
+        break;
+      }
+    }
+    if (actualExpr != null) break;
+  }
+
+  return { conditionExpr, actualExpr, label, mode, error: null };
+}
+
 function basicParseResultOptions(resultBody) {
   const body = String(resultBody || '').trim();
   const commaIndex = basicFindTopLevelComma(body);
@@ -4678,6 +4776,17 @@ function basicValidateScript(source, paramNames = []) {
 
     if (/^PAUSE$/i.test(statement)) return;
 
+    match = statement.match(/^VERIFY\s+(.+)$/i);
+    if (match) {
+      const verifySpec = basicParseVerifyOptions(match[1]);
+      if (verifySpec.error) {
+        errors.push(`Line ${lineNum}: VERIFY: ${verifySpec.error}`);
+        return;
+      }
+      basicValidateConditionSyntax(verifySpec.conditionExpr, lineNum, definedParams, errors);
+      return;
+    }
+
     match = statement.match(/^(?:LET\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*INPUT\("([^"]*)"\)$/i);
     if (match) return;
 
@@ -4723,9 +4832,19 @@ function basicValidateScript(source, paramNames = []) {
         return;
       }
 
+      if (/^VERIFY\s+(.+)$/i.test(thenBody)) {
+        const verifySpec = basicParseVerifyOptions(thenBody.replace(/^VERIFY\s+/i, '').trim());
+        if (verifySpec.error) {
+          errors.push(`Line ${lineNum}: IF THEN VERIFY: ${verifySpec.error}`);
+          return;
+        }
+        basicValidateConditionSyntax(verifySpec.conditionExpr, lineNum, definedParams, errors);
+        return;
+      }
+
       if (/^END$/i.test(thenBody)) return;
 
-      errors.push(`Line ${lineNum}: IF THEN body must be one of GOTO, LET, PRINT, GOSUB, or END`);
+      errors.push(`Line ${lineNum}: IF THEN body must be one of GOTO, LET, PRINT, GOSUB, VERIFY, or END`);
       return;
     }
 
@@ -6219,8 +6338,18 @@ function basicEvalExpr(expr, vars) {
         }
         return String(machineState || 'unknown');
       }
-      // Variable lookup
+      // Variable lookup — read-only VERIFY counters shadow user variables
       const normalizedName = basicNormalizeRuntimeVarName(name);
+      if (normalizedName === 'PASS_COUNT') {
+        let passCount = 0;
+        basicChecks.forEach((check) => { if (check.status === 'PASS') passCount += 1; });
+        return passCount;
+      }
+      if (normalizedName === 'FAIL_COUNT') {
+        let failCount = 0;
+        basicChecks.forEach((check) => { if (check.status === 'FAIL') failCount += 1; });
+        return failCount;
+      }
       if (Object.prototype.hasOwnProperty.call(vars, normalizedName)) return vars[normalizedName];
       throw new Error(`Undefined variable: ${name}`);
     }
@@ -8016,6 +8145,7 @@ async function runBasicScript(source) {
   basicStopMessage = '--- Script stopped by user ---';
   basicVars = {};
   basicResults = new Map();
+  basicChecks = new Map();
   basicCallStack = [];
   basicForStack = [];
   resetBasicBufferedStream();
@@ -8118,7 +8248,11 @@ async function runBasicScript(source) {
         if (eq !== -1) {
           const varName = body.slice(0, eq).trim();
           const valExpr = body.slice(eq + 1).trim();
-          basicVars[basicNormalizeRuntimeVarName(varName)] = await basicEvalExprRuntime(valExpr, basicVars);
+          const normalizedTarget = basicNormalizeRuntimeVarName(varName);
+          if (normalizedTarget === 'PASS_COUNT' || normalizedTarget === 'FAIL_COUNT') {
+            throw new Error(`LET: ${normalizedTarget} is a read-only VERIFY counter`);
+          }
+          basicVars[normalizedTarget] = await basicEvalExprRuntime(valExpr, basicVars);
         }
         pc++;
         continue;
@@ -8368,6 +8502,14 @@ async function runBasicScript(source) {
           }
           addLine('--- End Results ---', 'basic');
         }
+        if (basicChecks.size) {
+          addLine('--- Checks ---', 'basic');
+          for (const [label, check] of basicChecks.entries()) {
+            const actualPart = check.actual != null ? ` (${check.actual})` : '';
+            addLine(`${label} .......... ${check.status}${actualPart}`, check.status === 'PASS' ? 'basic' : 'err');
+          }
+          addLine('--- End Checks ---', 'basic');
+        }
         pc++;
         continue;
       }
@@ -8450,7 +8592,42 @@ async function runBasicScript(source) {
         continue;
       }
 
-      // IF ... THEN [GOTO n | LET ... | PRINT ... | GOSUB n | END]
+      // VERIFY <condition>, "<label>" [HALT|ASK]
+      if (/^VERIFY\s+/i.test(stmt)) {
+        const verifySpec = basicParseVerifyOptions(stmt.replace(/^VERIFY\s+/i, '').trim());
+        if (verifySpec.error) throw new Error(`VERIFY: ${verifySpec.error}`);
+        const passed = await basicParseConditionRuntime(verifySpec.conditionExpr, basicVars);
+        const actualText = verifySpec.actualExpr != null
+          ? String(await basicEvalExprRuntime(verifySpec.actualExpr, basicVars))
+          : null;
+        basicChecks.set(verifySpec.label, {
+          status: passed ? 'PASS' : 'FAIL',
+          actual: actualText,
+          line: lineNum
+        });
+        if (passed) {
+          addLine(`VERIFY PASS ${verifySpec.label}`, 'basic');
+        } else {
+          addLine(`VERIFY FAIL ${verifySpec.label}${actualText != null ? ` (actual=${actualText})` : ''}`, 'err');
+          if (verifySpec.mode === 'HALT') {
+            throw new Error(`VERIFY HALT: ${verifySpec.label}`);
+          }
+          if (verifySpec.mode === 'ASK') {
+            const askMessage = `Check failed: ${verifySpec.label}${actualText != null ? ` (actual=${actualText})` : ''}\n\nContinue or cancel the script?`;
+            addLine(`VERIFY ASK: ${askMessage.split('\n')[0]}`, 'basic');
+            const confirmed = await basicShowConfirm(askMessage, {});
+            if (!confirmed) {
+              requestBasicStop('VERIFY ASK declined; stopping script...', '--- Script stopped: VERIFY ASK declined ---');
+              stopScript();
+              break;
+            }
+          }
+        }
+        pc++;
+        continue;
+      }
+
+      // IF ... THEN [GOTO n | LET ... | PRINT ... | GOSUB n | END | VERIFY ...]
       if (/^IF\s+/i.test(stmt)) {
         const thenM = stmt.match(/^IF\s+(.+)\s+THEN\s+([\s\S]+)$/i);
         if (thenM) {
@@ -8499,6 +8676,42 @@ async function runBasicScript(source) {
             if (/^END$/i.test(thenBody)) {
               addLine('--- Script ended ---', 'basic');
               break;
+            }
+            if (/^VERIFY\s+/i.test(thenBody)) {
+              const verifySpec = basicParseVerifyOptions(thenBody.replace(/^VERIFY\s+/i, '').trim());
+              if (verifySpec.error) {
+                addLine(`Line ${lineNum}: IF THEN VERIFY: ${verifySpec.error}`, 'err');
+                break;
+              }
+              const passed = await basicParseConditionRuntime(verifySpec.conditionExpr, basicVars);
+              const actualText = verifySpec.actualExpr != null
+                ? String(await basicEvalExprRuntime(verifySpec.actualExpr, basicVars))
+                : null;
+              basicChecks.set(verifySpec.label, {
+                status: passed ? 'PASS' : 'FAIL',
+                actual: actualText,
+                line: lineNum
+              });
+              if (passed) {
+                addLine(`VERIFY PASS ${verifySpec.label}`, 'basic');
+              } else {
+                addLine(`VERIFY FAIL ${verifySpec.label}${actualText != null ? ` (actual=${actualText})` : ''}`, 'err');
+                if (verifySpec.mode === 'HALT') {
+                  throw new Error(`VERIFY HALT: ${verifySpec.label}`);
+                }
+                if (verifySpec.mode === 'ASK') {
+                  const askMessage = `Check failed: ${verifySpec.label}${actualText != null ? ` (actual=${actualText})` : ''}\n\nContinue or cancel the script?`;
+                  addLine(`VERIFY ASK: ${askMessage.split('\n')[0]}`, 'basic');
+                  const confirmed = await basicShowConfirm(askMessage, {});
+                  if (!confirmed) {
+                    requestBasicStop('VERIFY ASK declined; stopping script...', '--- Script stopped: VERIFY ASK declined ---');
+                    stopScript();
+                    break;
+                  }
+                }
+              }
+              pc++;
+              continue;
             }
             addLine(`Line ${lineNum}: IF THEN: unsupported body: ${thenBody}`, 'err');
             break;
