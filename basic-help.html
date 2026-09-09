@@ -355,8 +355,8 @@
 60 SEND "M3 G1 F" &amp; feed &amp; " S" &amp; speed TIMEOUT 1500 REQUIRE_OK
 70 PRINT "Success check: M3 G1 acknowledged at S" &amp; speed &amp; " F" &amp; feed
 80 STATUS
-90 LET st = WAIT_FOR_LINE("^&lt;", 2000)
-100 IF st = "" THEN GOTO 9000
+90 WAIT_FOR_LINE("^&lt;", 2000) INTO st
+100 VERIFY st &lt;&gt; "", "status_frame" HALT
 110 PRINT "Success check: STATUS returned: " &amp; st
 120 HOLD
 130 PRINT "Success check: controller should enter Hold state."
@@ -365,10 +365,7 @@
 160 PRINT "Success check: controller should leave Hold and continue."
 170 SEND "M5" TIMEOUT 1500 REQUIRE_OK
 180 PRINT "Test complete: M5 acknowledged."
-190 END
-9000 PRINT "No STATUS frame returned within 2000 ms."
-9010 SEND "M5" TIMEOUT 1500 REQUIRE_OK
-9020 END</code></pre>
+190 END</code></pre>
     </section>
 
     <section class="card">
@@ -396,28 +393,24 @@
 80 REM WAIT_FOR_LINE only catches lines arriving after STATUS is sent
 90 STATUS
 100 WAIT_FOR_LINE("^&lt;", 2000) INTO status_line
-110 IF status_line = "" THEN GOTO 9000
+110 VERIFY status_line &lt;&gt; "", "wait_for_line_into" HALT
 120 PRINT "Success check: WAIT_FOR_LINE INTO: " &amp; status_line
 130 STATUS
 140 LET status_line2 = WAIT_FOR_LINE("^&lt;", 2000)
-150 IF status_line2 = "" THEN GOTO 9010
+150 VERIFY status_line2 &lt;&gt; "", "wait_for_line_let" HALT
 160 PRINT "Success check: WAIT_FOR_LINE LET: " &amp; status_line2
 170 REM READ_LINE returns the very next incoming line
 180 STATUS
 190 LET next_line = READ_LINE(1500)
-200 IF next_line = "" THEN GOTO 9020
+200 VERIFY next_line &lt;&gt; "", "read_line_let" HALT
 210 PRINT "Success check: READ_LINE LET: " &amp; next_line
 220 STATUS
 230 READ_LINE(1500) INTO line2
-240 IF line2 = "" THEN GOTO 9030
+240 VERIFY line2 &lt;&gt; "", "read_line_into" HALT
 250 PRINT "Success check: READ_LINE INTO: " &amp; line2
 260 PRINT "Section 3 test complete."
-270 END
-9000 PRINT "WAIT_FOR_LINE INTO timed out."
-9010 PRINT "WAIT_FOR_LINE LET timed out."
-9020 PRINT "READ_LINE LET timed out."
-9030 PRINT "READ_LINE INTO timed out."
-9040 END</code></pre>
+270 END</code></pre>
+      <p>A timeout (<code>""</code> result) fails the matching <code>VERIFY ... HALT</code> check and stops the script immediately — no numbered error branches needed. Failures also appear in the <em>Checks</em> block on <code>REPORT</code>.</p>
     </section>
 
     <section class="card">
@@ -438,14 +431,11 @@
 30 CONNECT BAUD 115200
 40 STATUS
 50 LET reply = WAIT_FOR_LINE("GrblHAL|Grbl|FluidNC|&lt;", 3000)
-60 IF reply = "" THEN GOTO 9000
+60 VERIFY reply &lt;&gt; "", "controller_banner" HALT
 70 PRINT "Success check: connected and received: " &amp; reply
 80 DISCONNECT
 90 PRINT "Success check: serial connection closed."
-100 END
-9000 PRINT "No response from controller (check cable, baud, power)."
-9010 DISCONNECT
-9020 END</code></pre>
+100 END</code></pre>
 
       <h3 style="margin:16px 0 8px; font-size:15px; color:var(--teal);">WebSocket (WiFi / FluidNC)</h3>
       <p>Use <code>CONNECT WS</code> to connect to a FluidNC or ESP32-based controller over WiFi. No browser port picker appears &mdash; the script connects directly to the address you supply.</p>
@@ -460,19 +450,15 @@
 30 CONNECT WS "192.168.1.100"
 40 REM Use PORT 81 for older FluidNC: CONNECT WS "192.168.1.100" PORT 81
 50 LET reply = WAIT_FOR_LINE("GrblHAL|Grbl|FluidNC|&lt;", 5000)
-60 IF reply = "" THEN GOTO 9000
+60 VERIFY reply &lt;&gt; "", "ws_handshake" HALT
 70 PRINT "Success check: WS connected and received: " &amp; reply
 80 SEND "$I" TIMEOUT 3000 REQUIRE_OK
 90 LET info = WAIT_FOR_LINE("\[VER:", 3000)
-100 IF info = "" THEN GOTO 9010
+100 VERIFY info &lt;&gt; "", "firmware_ver_line" HALT
 110 PRINT "Success check: firmware info line: " &amp; info
 120 DISCONNECT
 130 PRINT "Success check: WS connection closed."
-140 END
-9000 PRINT "No handshake line. Check WiFi address/port and controller state."
-9010 PRINT "No [VER:] firmware line after $I."
-9020 DISCONNECT
-9030 END</code></pre>
+140 END</code></pre>
     </section>
 
     <section class="card">
@@ -574,7 +560,7 @@
         <li><code>LOG(expr)</code>: Natural logarithm (<code>ln</code>).</li>
         <li><code>LN(expr)</code>: Alias for natural logarithm.</li>
         <li><code>LOG10(expr)</code>: Base-10 logarithm.</li>
-        <li><code>CLAMP(value, min, max)</code>: Bound a value to a range.</li>
+        <li><code>CLAMP(value, min, max)</code>: Bound a value to a range. Prefer over nested <code>IF</code> checks for capping feeds, powers, and computed limits — e.g. <code>LET eff_feed = CLAMP(target_feed, 0, v_max_rate)</code>.</li>
         <li><code>MAX(a, b)</code>: Larger of two values.</li>
         <li><code>MIN(a, b)</code>: Smaller of two values.</li>
         <li><code>MOD(a, b)</code> or <code>a % b</code>: Remainder (modulo).</li>
@@ -590,7 +576,7 @@
         <li><code>RAD(degValue)</code>: Convert degrees to radians.</li>
         <li><code>DEG(radValue)</code>: Convert radians to degrees.</li>
         <li><code>RND(max)</code>: Random integer from 1 to max.</li>
-        <li><code>GCODE_PARAM(key[, fallback])</code>: Read cached CNC-style parameters such as <code>#100</code> or <code>#&lt;_x&gt;</code> with optional default fallback.</li>
+        <li><code>GCODE_PARAM(key[, fallback])</code>: Read cached CNC-style parameters such as <code>#100</code> or <code>#&lt;_x&gt;</code> with optional default fallback — e.g. <code>LET work_x = GCODE_PARAM("#&lt;_x&gt;", 0)</code>.</li>
         <li><code>BF_SERIAL()</code>: Estimated serial RX capacity in bytes. Uses observed <code>Bf:</code> serial values; if none have been observed yet, returns the current <code>SET RX_BUFFER</code> fallback.</li>
         <li><code>BF_PLANNER()</code>: Estimated planner capacity in slots from observed <code>Bf:</code> planner values. Returns <code>-1</code> when planner data is unavailable.</li>
         <li><code>STATE()</code> or <code>STATE</code>: Current machine state string.</li>
@@ -761,10 +747,11 @@
 70 WAIT_IDLE {idle_timeout}
 80 PRINT "BENCH END accel=" &amp; accel &amp; " distance=" &amp; distance
 90 LET ms = BENCH_LAST_MS()
-100 PRINT "Took " &amp; ms &amp; " ms at accel=" &amp; accel &amp; " distance=" &amp; distance
+100 PRINT "Took " &amp; FORMAT_MS(ms) &amp; " at accel=" &amp; accel &amp; " distance=" &amp; distance
 110 END
 9000 PRINT "Benchmark cancelled."
 9010 END</code></pre>
+      <p>Line 90 uses <code>BENCH_LAST_MS()</code> instead of a manual <code>CLOCK()</code>/<code>ELAPSED()</code> lap-timer — when a <code>BENCH START</code>/<code>BENCH END</code> pair is active, the app measures the window for you. Use <code>CLOCK()</code>/<code>ELAPSED()</code> only for timing regions that don't map to a BENCH sample, and <code>FORMAT_MS()</code> to render durations readably.</p>
     </section>
 
     <section class="card">
@@ -837,18 +824,13 @@
 50 IF proceed &lt;&gt; 1 THEN GOTO 9000
 60 LET original_accel = SETTING("$120")
 70 LET original_feed = SETTING("$110")
-80 LET last_good = 0
-90 LET first_bad = 0
-100 LET fine_good = 0
-110 LET fine_bad = 0
-120 LET recommended = 0
-130 LET current_accel = 0
-140 LET answer = 0
-150 LET max_tested_accel = 0
-160 LET max_mid_speed_mm_min = 0
-170 LET apply_choice = 0
-180 PRINT "Original $120 = " &amp; original_accel
-190 PRINT "Original $110 = " &amp; original_feed
+80 LET last_good = 0 : LET first_bad = 0
+90 LET fine_good = 0 : LET fine_bad = 0
+100 LET recommended = 0 : LET current_accel = 0 : LET answer = 0
+110 LET max_tested_accel = 0
+120 LET max_mid_speed_mm_min = 0 : LET apply_choice = 0
+130 PRINT "Original $120 = " &amp; original_accel
+140 PRINT "Original $110 = " &amp; original_feed
 200 PRINT "Temporarily setting feed speed high"
 210 SEND "$110=60000" TIMEOUT 2000 REQUIRE_OK
 220 SEND "G21" TIMEOUT 1000 REQUIRE_OK
@@ -1020,11 +1002,9 @@
 57 LET v_max_rate = SETTING("$110")
 58 LET max_x_velocity = v_max_rate / 60
 59 LET v_max_distance = {max_distance}
-60 LET best_mm_min = 0
-61 LET best_accel = 0
-62 LET best_dist = 0
-63 LET gain = 0
-64 LET peak_mm_min = 0
+60 LET best_mm_min = 0 : LET best_accel = 0
+61 LET best_dist = 0 : LET gain = 0
+62 LET peak_mm_min = 0
 65 PRINT "Cruise = $110 = " & v_max_rate & " mm/min (" & ROUND(max_x_velocity, 1) & " mm/s). Moves feed at F" & v_max_rate & "."
 90 STATUS
 92 WAIT v_settle_ms
@@ -1034,11 +1014,8 @@
 
 200 IF current_distance > v_max_distance THEN GOTO 8000
 210 LET batch_travel = v_batch * 2 * current_distance
-216 LET prev_mm_min = 0
-217 LET streak = 0
-218 LET plateaued = 0
-219 LET plateau_accel = 0
-220 LET plateau_mm_min = 0
+215 LET prev_mm_min = 0 : LET streak = 0
+218 LET plateaued = 0 : LET plateau_accel = 0 : LET plateau_mm_min = 0
 250 PRINT "Distance " & current_distance & " mm, batch=" & v_batch & " (" & batch_travel & " mm per step)"
 300 FOR test_accel = v_start_accel TO v_max_accel STEP v_accel_step
 310 LET current_accel = test_accel
@@ -1073,30 +1050,30 @@
 1074 IF last_ms <= 0 THEN GOTO 1095
 1078 LET mm_per_min = ROUND(batch_travel * 60000 / last_ms, 1)
 1079 LET peak_mm_min = ROUND(MIN(v_max_rate, SQRT(current_accel * current_distance) * 60), 1)
-1085 LET ramp_up_mm = ROUND(peak_mm_min * peak_mm_min / 3600 / (2 * current_accel), 2)
+1080 REM CLAMP bounds the theoretical cruise velocity to the legal feed range (0..$110)
+1081 LET cruise_feed = CLAMP(SQRT(current_accel * current_distance) * 60, 0, v_max_rate)
+1085 LET ramp_up_mm = ROUND(cruise_feed * cruise_feed / 3600 / (2 * current_accel), 2)
 1086 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate & " mm_per_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min & " ramp_up_mm=" & ramp_up_mm
 1087 GOSUB 1200
-1088 PRINT "Measured distance=" & current_distance & " accel=" & current_accel & " ms=" & ROUND(last_ms, 1) & " throughput_mm_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min
+1088 PRINT "Measured distance=" & current_distance & " accel=" & current_accel & " took=" & FORMAT_MS(last_ms) & " throughput_mm_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min
 1090 RETURN
 1095 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
 1096 PRINT "Miss (zero ms) at accel=" & current_accel & "; not charted."
 1097 RETURN
 
-1200 REM Plateau detector
-1210 IF prev_mm_min > 0 THEN GOTO 1220
-1212 LET prev_mm_min = mm_per_min
-1214 RETURN
-1220 LET gain = (mm_per_min - prev_mm_min) / prev_mm_min * 100
-1230 LET prev_mm_min = mm_per_min
-1240 IF gain < v_plateau_pct THEN GOTO 1250
-1244 LET streak = 0
-1246 RETURN
+1200 REM Plateau detector — one AND condition replaces the nested GOTO ladder
+1210 IF prev_mm_min > 0 THEN GOTO 1230
+1220 LET prev_mm_min = mm_per_min
+1225 RETURN
+1230 LET gain = (mm_per_min - prev_mm_min) / prev_mm_min * 100
+1240 LET prev_mm_min = mm_per_min
 1250 LET streak = streak + 1
-1260 IF streak >= v_plateau_streak THEN GOTO 1270
-1264 RETURN
-1270 LET plateaued = 1
-1272 LET plateau_accel = current_accel
-1274 LET plateau_mm_min = mm_per_min
+1260 IF gain < v_plateau_pct AND streak >= v_plateau_streak THEN GOTO 1280
+1270 LET streak = 0
+1275 RETURN
+1280 LET plateaued = 1
+1282 LET plateau_accel = current_accel
+1284 LET plateau_mm_min = mm_per_min
 1290 PRINT "Plateau at distance=" & current_distance & " accel=" & current_accel & " (gain " & ROUND(gain, 1) & "% for " & v_plateau_streak & " steps)"
 1299 RETURN
 

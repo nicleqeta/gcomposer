@@ -253,7 +253,7 @@ GCOM can be thought of as the **execution layer of gcomposer** — a determinist
 30 WAIT_IDLE 15000
 40 PRINT "Homing complete"
 50 FOR i = 1 TO 5
-60   SEND "G1 X" & STR(i * 10) & " F" & STR(feedrate) REQUIRE_OK
+60   SEND "G1 X" & i * 10 & " F" & feedrate REQUIRE_OK
 70 NEXT i
 80 END
 ```

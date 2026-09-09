@@ -708,7 +708,8 @@ Core statements:
   VERIFY condition, "label" [HALT|ASK] | RESULT key, expr | REPORT | END
   CONNECT [BAUD expr] [DTR expr] [WAIT expr] [OBSERVE] | CONNECT WS host [PORT expr] | DISCONNECT
   HOLD | RESUME | STATUS | SOFT_RESET
-  BENCH META key: value | BENCH STYLE yField property: value | BENCH START key=value ... | BENCH END key=value ...
+  BENCH META key: value | BENCH RECORDS template | BENCH STYLE yField property: value | BENCH START key=value ... | BENCH END key=value ...
+  Statement chaining: stmtA : stmtB on one numbered line (left-to-right; colons inside quoted strings are ignored).
 
 Math: ABS INT ROUND(v,d) SQRT SIN COS TAN ASIN ACOS ATAN ATAN2(y,x) RAD DEG RND(max)
   PI MOD(a,b) MIN(a,b) MAX(a,b) CLAMP(v,lo,hi) HYPOT(a,b) LN LOG LOG10 TRUNC SIGN CEIL FLOOR EXP
@@ -731,7 +732,7 @@ Advanced GCOM capabilities:
 - Pattern matching waits (WAIT_FOR_LINE("pattern", timeoutMs)): Use WAIT_FOR_LINE for connection detection, banner parsing, and response synchronization; pattern supports regex matching. Use explicit timeouts and handle timeout outcomes for robust scripts.
 - Interactive dialogs (FORM(...), INPUT(FORM(...))): Use FORM and INPUT(FORM(...)) for operator confirmations, branch selection, and diagnostic gates before risky actions. This is the preferred pattern for yes/no or multi-choice runtime decisions.
 - Verification checks (VERIFY): Use VERIFY to self-mark expected vs actual values in diagnostic and conformance scripts. Each check is named by a quoted label; PASS/FAIL outcomes are counted automatically and listed by REPORT in a Checks block. Read-only counters PASS_COUNT and FAIL_COUNT summarize outcomes (never LET-assign them). Add HALT to make a failing check stop the script — use it for preconditions that must hold before motion (e.g. VERIFY STATE() = "Idle", "machine_idle" HALT). Add ASK to show an operator dialog on failure (continue or cancel) — do not use ASK in unattended benchmark scripts. VERIFY can also be used inline: IF cond THEN VERIFY cond2, "label".
-- Benchmark markers (BENCH META, BENCH STYLE, BENCH START, BENCH END): Use benchmark markers to bracket timed sections and emit structured performance telemetry for analysis. BENCH META should define one chart property per line using BENCH META key: value; BENCH STYLE can set marker/line style per Y field; START/END should wrap each measured segment.
+- Benchmark markers (BENCH META, BENCH RECORDS, BENCH STYLE, BENCH START, BENCH END): Use benchmark markers to bracket timed sections and emit structured performance telemetry for analysis. BENCH META should define one chart property per line using BENCH META key: value; BENCH RECORDS declares per-sample record templates (plain {fieldname} references only); BENCH STYLE can set marker/line style per Y field; START/END should wrap each measured segment.
 - State functions (STATE(), WAIT_STATE "idle", WAIT_IDLE): Use STATE/WAIT_STATE to manage controller state transitions safely, and WAIT_IDLE to confirm queued motion is complete. Prefer state-aware flow control over fixed delays when sequencing machine operations.
 - Logic operators (AND / OR in IF and VERIFY conditions): Combine comparisons with AND/OR instead of hand-rolled arithmetic tricks. AND binds tighter than OR. Conditions support single-level comparisons on each side only: IF state = "Alarm" OR state = "Hold" THEN GOTO 9000. Do not nest comparisons inside parentheses or arithmetic.
 
@@ -875,10 +876,13 @@ AUTHORING RULES
 - Precision discipline for performance/readability: keep internal math at <= 6 decimal places and round emitted coordinate/feed words in SEND lines to <= 4 decimal places.
 
 BENCH MARKERS
-- BENCH protocol uses marker lines emitted via PRINT: BENCH META, BENCH STYLE, BENCH START, BENCH END.
+- BENCH protocol uses marker lines emitted via PRINT: BENCH META, BENCH RECORDS, BENCH STYLE, BENCH START, BENCH END.
 - BENCH META sets one chart metadata/axis mapping per line using BENCH META key: value; send it before the first BENCH START.
+- BENCH RECORDS declares how each completed sample is rendered as a pipe-separated record; each line adds one template segment of plain {fieldname} references (built-ins {_elapsed} and {_sampleIndex}); BENCH RECORDS CLEAR resets templates.
 - BENCH STYLE sets marker/line style for a Y field using BENCH STYLE yField property: value.
 - BENCH_LAST_MS() returns the elapsed ms for the most recently completed BENCH START/END pair.
+- FORMAT_MS(ms) renders a millisecond duration as a human-readable string ("456 ms" / "1.23 s") for PRINT output.
+- Statement chaining (stmtA : stmtB on one numbered line) is preferred over separate lines when a group of simple assignments or actions belongs together.
 
 EXAMPLE QUALITY RULES
 - Prefer complete script packages with ; TITLE, ; VERSION, ; AUTHOR, ; DESCRIPTION, and ; VAR headers.
