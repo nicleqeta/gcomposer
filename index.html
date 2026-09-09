@@ -4541,28 +4541,31 @@ function basicParseVerifyOptions(verifyBody) {
   }
   const label = labelM[1].trim();
 
-  // Extract the right-hand side of the top-level comparison for actual-value reporting.
-  // For AND/OR conditions, use the LAST logic operand so the reported actual value
-  // comes from a single comparison (evaluable as a plain expression) rather than
+  // Extract the sides of the top-level comparison for expected/actual reporting.
+  // For AND/OR conditions, use the LAST logic operand so the reported values
+  // come from a single comparison (evaluable as a plain expression) rather than
   // trailing operands glued together (e.g. '"MPos" OR pos_type = "WPos"').
+  // GCOM convention: left side = actual value, right side = expected value.
   const logic = basicSplitConditionLogic(conditionExpr);
   const actualSource = logic.parts.length > 1 ? logic.parts[logic.parts.length - 1] : conditionExpr;
   const condOps = ['<=', '>=', '<>', '<', '>', '='];
   let inStr = false;
   let actualExpr = null;
+  let expectedExpr = null;
   for (let i = 0; i < actualSource.length; i++) {
     if (actualSource[i] === '"') { inStr = !inStr; continue; }
     if (inStr) continue;
     for (const op of condOps) {
       if (actualSource.slice(i, i + op.length) === op) {
-        actualExpr = actualSource.slice(i + op.length).trim();
+        actualExpr = actualSource.slice(0, i).trim();
+        expectedExpr = actualSource.slice(i + op.length).trim();
         break;
       }
     }
     if (actualExpr != null) break;
   }
 
-  return { conditionExpr, actualExpr, label, mode, error: null };
+  return { conditionExpr, actualExpr, expectedExpr, label, mode, error: null };
 }
 
 function basicParseResultOptions(resultBody) {
@@ -8687,8 +8690,13 @@ async function runBasicScript(source) {
         if (basicChecks.size) {
           addLine('--- Checks ---', 'basic');
           for (const [label, check] of basicChecks.entries()) {
-            const actualPart = check.actual != null ? ` (${check.actual})` : '';
-            addLine(`${label} .......... ${check.status}${actualPart}`, check.status === 'PASS' ? 'basic' : 'err');
+            let detailPart = '';
+            if (check.expected != null && check.actual != null) {
+              detailPart = ` (expected=${check.expected} actual=${check.actual})`;
+            } else if (check.actual != null) {
+              detailPart = ` (actual=${check.actual})`;
+            }
+            addLine(`${label} .......... ${check.status}${detailPart}`, check.status === 'PASS' ? 'basic' : 'err');
           }
           addLine('--- End Checks ---', 'basic');
         }
@@ -8782,20 +8790,27 @@ async function runBasicScript(source) {
         const actualText = verifySpec.actualExpr != null
           ? String(await basicEvalExprRuntime(verifySpec.actualExpr, basicVars))
           : null;
+        const expectedText = verifySpec.expectedExpr != null
+          ? String(await basicEvalExprRuntime(verifySpec.expectedExpr, basicVars))
+          : null;
+        const detailText = actualText != null || expectedText != null
+          ? ` expected=${expectedText ?? '?'} actual=${actualText ?? '?'}`
+          : '';
         basicChecks.set(verifySpec.label, {
           status: passed ? 'PASS' : 'FAIL',
           actual: actualText,
+          expected: expectedText,
           line: lineNum
         });
         if (passed) {
           addLine(`VERIFY PASS ${verifySpec.label}`, 'basic');
         } else {
-          addLine(`VERIFY FAIL ${verifySpec.label}${actualText != null ? ` (actual=${actualText})` : ''}`, 'err');
+          addLine(`VERIFY FAIL ${verifySpec.label}${detailText}`, 'err');
           if (verifySpec.mode === 'HALT') {
             throw new Error(`VERIFY HALT: ${verifySpec.label}`);
           }
           if (verifySpec.mode === 'ASK') {
-            const askMessage = `Check failed: ${verifySpec.label}${actualText != null ? ` (actual=${actualText})` : ''}\n\nContinue or cancel the script?`;
+            const askMessage = `Check failed: ${verifySpec.label}${detailText}\n\nContinue or cancel the script?`;
             addLine(`VERIFY ASK: ${askMessage.split('\n')[0]}`, 'basic');
             const confirmed = await basicShowConfirm(askMessage, {});
             if (!confirmed) {
@@ -8869,20 +8884,27 @@ async function runBasicScript(source) {
               const actualText = verifySpec.actualExpr != null
                 ? String(await basicEvalExprRuntime(verifySpec.actualExpr, basicVars))
                 : null;
+              const expectedText = verifySpec.expectedExpr != null
+                ? String(await basicEvalExprRuntime(verifySpec.expectedExpr, basicVars))
+                : null;
+              const detailText = actualText != null || expectedText != null
+                ? ` expected=${expectedText ?? '?'} actual=${actualText ?? '?'}`
+                : '';
               basicChecks.set(verifySpec.label, {
                 status: passed ? 'PASS' : 'FAIL',
                 actual: actualText,
+                expected: expectedText,
                 line: lineNum
               });
               if (passed) {
                 addLine(`VERIFY PASS ${verifySpec.label}`, 'basic');
               } else {
-                addLine(`VERIFY FAIL ${verifySpec.label}${actualText != null ? ` (actual=${actualText})` : ''}`, 'err');
+                addLine(`VERIFY FAIL ${verifySpec.label}${detailText}`, 'err');
                 if (verifySpec.mode === 'HALT') {
                   throw new Error(`VERIFY HALT: ${verifySpec.label}`);
                 }
                 if (verifySpec.mode === 'ASK') {
-                  const askMessage = `Check failed: ${verifySpec.label}${actualText != null ? ` (actual=${actualText})` : ''}\n\nContinue or cancel the script?`;
+                  const askMessage = `Check failed: ${verifySpec.label}${detailText}\n\nContinue or cancel the script?`;
                   addLine(`VERIFY ASK: ${askMessage.split('\n')[0]}`, 'basic');
                   const confirmed = await basicShowConfirm(askMessage, {});
                   if (!confirmed) {
