@@ -3554,14 +3554,32 @@ function refreshSidebarScrollArea({ remeasureBasicComposer = false } = {}) {
       autoResizeBasicScriptInput();
     }
     void sidebar.offsetHeight;
-    // Capture scroll AFTER layout changes so the clamp uses a fresh value.
-    // Capturing before the resize made typing in the composer clobber the
-    // sidebar scroll with a stale offset whenever async layout work (e.g.
-    // validation UI updates, textarea auto-resize) landed between capture
-    // and frame — the visible content would jump under the caret.
+    // Clamp only against the post-layout maximum; capture fresh here so a
+    // stale offset is never written back after layout settles.
     const previousScrollTop = sidebar.scrollTop;
     const maxScrollTop = Math.max(0, sidebar.scrollHeight - sidebar.clientHeight);
     sidebar.scrollTop = Math.min(previousScrollTop, maxScrollTop);
+  });
+}
+
+// Keep an element visually anchored while sidebar layout changes around it.
+// Captures the element's viewport position immediately, then after layout
+// settles (rAF) compensates sidebar.scrollTop by the drift. This prevents
+// the visible jump when content above/below the element resizes — e.g.
+// typing in the GCOM composer while the async validation box re-renders
+// and the browser clamps the clamped scrollTop to a shrunken scrollHeight.
+let sidebarStabilizeFrame = 0;
+function stabilizeSidebarAroundElement(el) {
+  if (!sidebar || !el) return;
+  const anchorTop = el.getBoundingClientRect().top;
+  if (sidebarStabilizeFrame) cancelAnimationFrame(sidebarStabilizeFrame);
+  sidebarStabilizeFrame = requestAnimationFrame(() => {
+    sidebarStabilizeFrame = 0;
+    const nowTop = el.getBoundingClientRect().top;
+    const delta = nowTop - anchorTop;
+    if (Math.abs(delta) >= 1) {
+      sidebar.scrollTop -= delta;
+    }
   });
 }
 
@@ -9553,6 +9571,10 @@ if (applyGcomStarterBtn) {
 
 // Enable/disable run button based on connection and script content
 basicScriptInput.addEventListener('input', () => {
+  // Anchor the caret's visible position before any layout churn: the textarea
+  // auto-resize and the async validation-box re-render both change sidebar
+  // content height, and the browser's scroll clamping then shifts the view.
+  stabilizeSidebarAroundElement(basicScriptInput);
   autoResizeBasicScriptInput();
   refreshSidebarScrollArea();
   markBasicScriptStructuralDirty();
