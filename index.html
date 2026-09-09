@@ -4273,6 +4273,16 @@ function basicValidateExpressionSyntax(expr, lineNum, contextLabel, definedParam
 }
 
 function basicValidateConditionSyntax(condition, lineNum, definedParams, errors) {
+  // AND/OR logic operators split the condition into operands; each operand
+  // must itself be a comparison. Validate each operand recursively.
+  const logic = basicSplitConditionLogic(condition);
+  if (logic.parts.length > 1) {
+    logic.parts.forEach((part) => {
+      basicValidateConditionSyntax(part, lineNum, definedParams, errors);
+    });
+    return;
+  }
+
   const match = String(condition || '').trim().match(/^(.+?)\s*(<=|>=|<>|=|<|>)\s*(.+)$/);
   if (!match) {
     errors.push(`Line ${lineNum}: IF condition must compare a left and right expression`);
@@ -6457,7 +6467,75 @@ function basicEvalExpr(expr, vars) {
   return result;
 }
 
+// Split a condition string on top-level AND/OR keywords (string-literal aware).
+// AND binds tighter than OR (BASIC convention). Returns { parts, ops } where ops[i]
+// joins parts[i] and parts[i+1]; ops entries are 'AND' | 'OR' in original order
+// with precedence applied at evaluation time (see basicCombineConditionParts).
+function basicSplitConditionLogic(condStr) {
+  const text = String(condStr || '').trim();
+  const parts = [];
+  const ops = [];
+  let inStr = false;
+  let depth = 0;
+  let start = 0;
+  const isBoundary = (idx, len) => {
+    const before = idx === 0 ? ' ' : text[idx - 1];
+    const after = text[idx + len] || ' ';
+    return !/[A-Za-z0-9_]/.test(before) && !/[A-Za-z0-9_]/.test(after);
+  };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"' && text[i - 1] !== '\\') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === '(' || ch === '[') { depth += 1; continue; }
+    if (ch === ')' || ch === ']') { depth -= 1; continue; }
+    if (depth !== 0) continue;
+    for (const kw of ['AND', 'OR']) {
+      if (text.slice(i, i + kw.length).toUpperCase() !== kw) continue;
+      if (!isBoundary(i, kw.length)) continue;
+      // Match whole-word keyword surrounded by whitespace-ish boundaries
+      const beforeIsSpace = i === 0 || /\s/.test(text[i - 1]);
+      const afterIsSpace = i + kw.length >= text.length || /\s/.test(text[i + kw.length]);
+      if (!beforeIsSpace || !afterIsSpace) continue;
+      parts.push(text.slice(start, i).trim());
+      ops.push(kw);
+      start = i + kw.length;
+      i += kw.length - 1;
+      break;
+    }
+  }
+  parts.push(text.slice(start).trim());
+  return { parts, ops };
+}
+
+// Combine evaluated boolean parts applying AND precedence over OR.
+// values: booleans for each part; ops: 'AND' | 'OR' between parts.
+function basicCombineConditionParts(values, ops) {
+  if (values.length === 1) return values[0];
+  // First pass: AND
+  const collapsed = [];
+  const collapsedOps = [];
+  collapsed.push(values[0]);
+  for (let i = 0; i < ops.length; i++) {
+    if (ops[i] === 'AND') {
+      collapsed[collapsed.length - 1] = collapsed[collapsed.length - 1] && values[i + 1];
+    } else {
+      collapsedOps.push('OR');
+      collapsed.push(values[i + 1]);
+    }
+  }
+  // Second pass: OR
+  return collapsed.reduce((acc, v) => acc || v, false);
+}
+
 function basicParseCondition(condStr, vars) {
+  // AND/OR logic operators first (top level, string-literal aware)
+  const logic = basicSplitConditionLogic(condStr);
+  if (logic.parts.length > 1) {
+    const values = logic.parts.map(part => basicParseCondition(part, vars));
+    return basicCombineConditionParts(values, logic.ops);
+  }
+
   // Find comparison operator at top level (respects string literals)
   const condOps = ['<=', '>=', '<>', '<', '>', '='];
   let inStr = false;
@@ -6690,6 +6768,16 @@ async function basicEvalExprRuntime(expr, vars) {
 }
 
 async function basicParseConditionRuntime(condStr, vars) {
+  // AND/OR logic operators first (top level, string-literal aware)
+  const logic = basicSplitConditionLogic(condStr);
+  if (logic.parts.length > 1) {
+    const values = [];
+    for (const part of logic.parts) {
+      values.push(await basicParseConditionRuntime(part, vars));
+    }
+    return basicCombineConditionParts(values, logic.ops);
+  }
+
   const condOps = ['<=', '>=', '<>', '<', '>', '='];
   let inStr = false;
   for (let i = 0; i < condStr.length; i++) {

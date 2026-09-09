@@ -530,6 +530,7 @@
       <ul>
         <li><code>FOR name = start TO end [STEP step]</code> and <code>NEXT [name]</code>: Counter loop with optional explicit step.</li>
         <li><code>IF condition THEN GOTO line</code>: Conditional jump. Also accepts <code>IF cond THEN LET</code>, <code>IF cond THEN PRINT</code>, <code>IF cond THEN GOSUB</code>, <code>IF cond THEN VERIFY</code>, and <code>IF cond THEN END</code> as single-line inline statements.</li>
+        <li><code>AND</code> / <code>OR</code>: Logic operators in <code>IF</code> and <code>VERIFY</code> conditions. <code>AND</code> binds tighter than <code>OR</code>. Operands are comparisons: <code>IF state = "Alarm" OR state = "Hold" THEN GOTO 9000</code>. Parentheses are honored when grouping comparison operands, but comparisons cannot be nested inside arithmetic — build boolean sums by combining comparisons with <code>AND</code>/<code>OR</code> instead.</li>
         <li><code>GOTO line</code>: Unconditional jump.</li>
         <li><code>GOSUB line</code> and <code>RETURN</code>: Subroutine call/return.</li>
         <li><code>END</code>: Stop script.</li>
@@ -608,6 +609,7 @@
         <li><code>VERIFY expr, "label"</code>: Check, record, and continue regardless of outcome.</li>
         <li><code>VERIFY expr, "label" HALT</code>: Check and record, then stop the script immediately if the check fails. Use for preconditions that must hold before continuing (e.g. machine Idle before motion).</li>
         <li><code>VERIFY expr, "label" ASK</code>: Check and record, then on failure show a dialog where the operator chooses Continue or Cancel Script. Not suitable for unattended runs.</li>
+        <li>Conditions support <code>AND</code>/<code>OR</code>: <code>VERIFY pos_type = "MPos" OR pos_type = "WPos", "pos_type"</code>.</li>
         <li><code>PASS_COUNT</code> / <code>FAIL_COUNT</code>: Read-only variables derived from the recorded checks. They cannot be assigned with <code>LET</code>.</li>
         <li><code>VERIFY</code> also works inline: <code>IF cond THEN VERIFY other_cond, "label"</code>.</li>
       </ul>
@@ -644,20 +646,19 @@
 160 VERIFY SPLIT_PART(clean, "|", 1, "") = "&lt;" &amp; {expected_state}, "parsed_state"
 170 VERIFY token_count &gt;= 8, "field_count_min"
 180 LET pos_type = SPLIT_PART(SPLIT_PART(clean, "|", 2, ""), ":", 1, "")
-190 LET pos_ok = (pos_type = "MPos") + (pos_type = "WPos")
-200 VERIFY pos_ok &gt; 0, "pos_type"
-210 LET pos_values = SPLIT_PART(SPLIT_PART(clean, "|", 2, ""), ":", 2, "")
-220 VERIFY SPLIT_PART(pos_values, ",", 1, "") = "{expected_x}", "parsed_x"
-230 VERIFY SPLIT_PART(pos_values, ",", 2, "") = "{expected_y}", "parsed_y"
-240 VERIFY SPLIT_PART(pos_values, ",", 3, "") = "{expected_z}", "parsed_z"
-250 VERIFY CONTAINS(clean, "Bf:") = 1, "bf_fields_present" ASK
-260 IF CONTAINS(clean, "Pn:") = 1 THEN PRINT "NOTE: Pn: pin field active - input pin state reported"
-270 RESULT "tokens_parsed", token_count
-280 PRINT "Summary: " &amp; PASS_COUNT &amp; " passed, " &amp; FAIL_COUNT &amp; " failed"
-290 REPORT
-300 IF FAIL_COUNT = 0 THEN PRINT "FINAL RESULT: PASS"
-310 IF FAIL_COUNT &gt; 0 THEN PRINT "FINAL RESULT: FAIL"
-320 END</code></pre>
+190 VERIFY pos_type = "MPos" OR pos_type = "WPos", "pos_type"
+200 LET pos_values = SPLIT_PART(SPLIT_PART(clean, "|", 2, ""), ":", 2, "")
+210 VERIFY SPLIT_PART(pos_values, ",", 1, "") = "{expected_x}", "parsed_x"
+220 VERIFY SPLIT_PART(pos_values, ",", 2, "") = "{expected_y}", "parsed_y"
+230 VERIFY SPLIT_PART(pos_values, ",", 3, "") = "{expected_z}", "parsed_z"
+240 VERIFY CONTAINS(clean, "Bf:") = 1, "bf_fields_present" ASK
+250 IF CONTAINS(clean, "Pn:") = 1 THEN PRINT "NOTE: Pn: pin field active - input pin state reported"
+260 RESULT "tokens_parsed", token_count
+270 PRINT "Summary: " &amp; PASS_COUNT &amp; " passed, " &amp; FAIL_COUNT &amp; " failed"
+280 REPORT
+290 IF FAIL_COUNT = 0 THEN PRINT "FINAL RESULT: PASS"
+300 IF FAIL_COUNT &gt; 0 THEN PRINT "FINAL RESULT: FAIL"
+310 END</code></pre>
     </section>
 
     <section class="card">

@@ -701,6 +701,7 @@ Core statements:
   WAIT_FOR_LINE(pattern [, timeoutMs]) | READ_LINE([timeoutMs])
   PRINT expr | INPUT var [, "Prompt"] | LET var = FORM(msgExpr, v1, v2, ...)
   IF condition THEN GOTO line
+  Condition operators: AND | OR (comparisons only; AND binds tighter than OR)  
   FOR var = start TO end [STEP n] ... NEXT [var]
   GOSUB line ... RETURN
   LET var = SETTING("$N") | LET var = READ("$N")
@@ -732,6 +733,7 @@ Advanced GCOM capabilities:
 - Verification checks (VERIFY): Use VERIFY to self-mark expected vs actual values in diagnostic and conformance scripts. Each check is named by a quoted label; PASS/FAIL outcomes are counted automatically and listed by REPORT in a Checks block. Read-only counters PASS_COUNT and FAIL_COUNT summarize outcomes (never LET-assign them). Add HALT to make a failing check stop the script — use it for preconditions that must hold before motion (e.g. VERIFY STATE() = "Idle", "machine_idle" HALT). Add ASK to show an operator dialog on failure (continue or cancel) — do not use ASK in unattended benchmark scripts. VERIFY can also be used inline: IF cond THEN VERIFY cond2, "label".
 - Benchmark markers (BENCH META, BENCH STYLE, BENCH START, BENCH END): Use benchmark markers to bracket timed sections and emit structured performance telemetry for analysis. BENCH META should define one chart property per line using BENCH META key: value; BENCH STYLE can set marker/line style per Y field; START/END should wrap each measured segment.
 - State functions (STATE(), WAIT_STATE "idle", WAIT_IDLE): Use STATE/WAIT_STATE to manage controller state transitions safely, and WAIT_IDLE to confirm queued motion is complete. Prefer state-aware flow control over fixed delays when sequencing machine operations.
+- Logic operators (AND / OR in IF and VERIFY conditions): Combine comparisons with AND/OR instead of hand-rolled arithmetic tricks. AND binds tighter than OR. Conditions support single-level comparisons on each side only: IF state = "Alarm" OR state = "Hold" THEN GOTO 9000. Do not nest comparisons inside parentheses or arithmetic.
 
 CRITICAL SYNTAX RULES (must follow):
 - Do NOT use // comments anywhere.
@@ -810,6 +812,7 @@ Source: basic-help.html distilled manifest
 PROGRAM FLOW
 - Supported flow control: FOR/NEXT, IF ... THEN GOTO, IF ... THEN LET, IF ... THEN PRINT, IF ... THEN GOSUB, IF ... THEN VERIFY, IF ... THEN END, GOTO, GOSUB, RETURN, END.
 - VERIFY expr, "label" [HALT|ASK]: named self-marking check. Counted automatically; labels appear in REPORT Checks block. PASS_COUNT/FAIL_COUNT are read-only. HALT stops the script on failure (use for preconditions before motion); ASK shows an operator dialog on failure (not for unattended runs).
+- IF/VERIFY conditions support AND/OR between comparisons (AND binds tighter than OR): IF state = "Alarm" OR state = "Hold" THEN GOTO 9000. Do not nest comparisons inside arithmetic or parentheses.
 - Unsupported flow control: WHILE, WEND, ENDWHILE, DO/LOOP, O-codes, macro variables.
 
 VARIABLES AND HEADERS
