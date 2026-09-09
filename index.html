@@ -3666,18 +3666,88 @@ function collectBenchOnlyTemplateNames(programText = '') {
   return benchOnly;
 }
 
-function substituteVars(program, vars) {
+// Format a typed var value for {placeholder} substitution in program text.
+// Numbers substitute bare (42 -> 42, preserving expression semantics).
+// Strings substitute as a quoted, escaped string literal ('<Idle' -> '"<Idle"')
+// so text values are valid expression operands in every context.
+// Used only OUTSIDE string literals; inside literals, substituteVarsInLine
+// inserts the raw text instead (see below).
+function formatVarForSubstitution(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  const text = String(value ?? '');
+  return '"' + text.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+}
+
+// Substitute {name} placeholders in one line, context-aware:
+// - inside a string literal: insert the raw value text (so "x{state}y" embeds
+//   the value naturally without double quoting)
+// - outside string literals: numbers bare, strings quoted+escaped
+function substituteVarsInLine(line, vars) {
+  const lookup = (name) => {
+    if (Object.prototype.hasOwnProperty.call(vars, name)) return vars[name];
+    const upper = name.toUpperCase();
+    if (Object.prototype.hasOwnProperty.call(vars, upper)) return vars[upper];
+    return undefined;
+  };
+  let result = '';
+  let inString = false;
+  let i = 0;
+  while (i < line.length) {
+    const ch = line[i];
+    if (ch === '"' && line[i - 1] !== '\\') {
+      inString = !inString;
+      result += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '{' && !inString) {
+      const m = line.slice(i).match(/^\{([A-Za-z_][A-Za-z0-9_]*)\}/);
+      if (m) {
+        const value = lookup(m[1]);
+        if (value !== undefined) {
+          result += formatVarForSubstitution(value);
+          i += m[0].length;
+          continue;
+        }
+      }
+    }
+    if (ch === '{' && inString) {
+      const m = line.slice(i).match(/^\{([A-Za-z_][A-Za-z0-9_]*)\}/);
+      if (m) {
+        const value = lookup(m[1]);
+        if (value !== undefined) {
+          result += String(value ?? '');
+          i += m[0].length;
+          continue;
+        }
+      }
+    }
+    result += ch;
+    i += 1;
+  }
+  return result;
+}
+
+function substituteVars(program, vars, options = {}) {
   const source = String(program || '');
   const lines = source.split('\n');
+  // prose mode: descriptions substitute raw text (no quoting, no string-literal
+  // tracking) — matches how users expect {name} to render in sentences.
+  const proseMode = options && options.prose === true;
   const substituted = lines.map(line => {
     if (isBenchTemplateLine(line)) return line;
-    let result = line;
-    for (const [key, value] of Object.entries(vars)) {
-      result = result.replaceAll(`{${key}}`, value);
-    }
-    return result;
+    return proseMode ? substituteVarsProseInLine(line, vars) : substituteVarsInLine(line, vars);
   });
   return substituted.join('\n');
+}
+
+// Prose-mode line substitution: raw text insertion for all values.
+function substituteVarsProseInLine(line, vars) {
+  let result = String(line || '');
+  for (const [key, value] of Object.entries(vars)) {
+    result = result.replaceAll(`{${key}}`, String(value ?? ''));
+  }
+  return result;
 }
 
 function buildBasicDescriptionEvalVars(vars) {
@@ -3699,7 +3769,7 @@ function renderBasicDescriptionTemplate(rawText, vars) {
       return match;
     }
   });
-  return substituteVars(withExpressions, vars || {});
+  return substituteVars(withExpressions, vars || {}, { prose: true });
 }
 
 const BASIC_IMPORT_LINE_RE = /^\s*\d+\b/;
@@ -3875,10 +3945,20 @@ function reportWarning(warnings, lineNum, message) {
   addWarningDiagnostic(lineNum, message);
 }
 
+// Parse a raw VAR header/editor value into a typed value.
+// - "42" / "0.000" -> number (bare numeric text)
+// - quoted text    -> string with quotes stripped and \-escapes resolved (declared string)
+// - anything else  -> string as-is
+// Type matters at substitution time: numbers substitute bare; strings substitute
+// as quoted-and-escaped literals so text like '<Idle' is valid in any expression.
 function basicParseValue(value) {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   const text = String(value ?? '').trim();
   if (/^-?(?:\d+\.\d+|\d+|\.\d+)$/.test(text)) return Number(text);
+  const quotedM = text.match(/^"((?:[^"\\]|\\.)*)"$/);
+  if (quotedM) return quotedM[1].replace(/\\(["\\])/g, '$1');
+  const singleM = text.match(/^'((?:[^'\\]|\\.)*)'$/);
+  if (singleM) return singleM[1].replace(/\\(['\\])/g, '$1');
   return text;
 }
 
@@ -5808,12 +5888,21 @@ function basicTokenize(expr) {
   while (i < expr.length) {
     const ch = expr[i];
     if (/\s/.test(ch)) { i++; continue; }
-    // String literal (double or single quotes)
+    // String literal (double or single quotes), with backslash escapes
     if (ch === '"' || ch === "'") {
       const quote = ch;
       let j = i + 1;
-      while (j < expr.length && expr[j] !== quote) j++;
-      tokens.push({ type: 'STRING', value: expr.slice(i + 1, j) });
+      let value = '';
+      while (j < expr.length && expr[j] !== quote) {
+        if (expr[j] === '\\' && j + 1 < expr.length) {
+          value += expr[j + 1];
+          j += 2;
+          continue;
+        }
+        value += expr[j];
+        j++;
+      }
+      tokens.push({ type: 'STRING', value });
       i = j + 1;
       continue;
     }

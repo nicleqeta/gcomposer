@@ -52,10 +52,17 @@ function normalizeScriptPayload(payload) {
   };
 }
 
+// Format a typed var value for {placeholder} substitution in metadata descriptions.
+// Descriptions are prose, so values substitute as raw text (numbers bare, strings
+// as their text) — matching the client's in-string substitution behavior.
+function formatScriptVarForSubstitution(value) {
+  return String(value ?? '');
+}
+
 function substituteScriptVars(text, vars) {
   let result = String(text || '');
   for (const [key, value] of Object.entries(vars || {})) {
-    result = result.replaceAll(`{${key}}`, value);
+    result = result.replaceAll(`{${key}}`, formatScriptVarForSubstitution(value));
   }
   return result.trim();
 }
@@ -712,6 +719,7 @@ Tokenization: SPLIT_COUNT(text,delim) SPLIT_PART(text,delim,index[,fallback])
      SPLIT_INTO(text,delim,prefix)
 State/Runtime: STATE() CLOCK() ELAPSED() BF_SERIAL() BF_PLANNER() GCODE_PARAM(key[,fallback]) FORMAT_MS(ms) BENCH_LAST_MS()
 Template variables come from ; VAR name=value headers and are referenced as {name} in program text.
+Substitution is type-aware: numeric vars substitute bare; text vars substitute as quoted literals outside strings and raw text inside strings. Quote the VAR value (e.g. ; VAR state="Idle") to force text typing.
 DESCRIPTION lines may also use {{expr}} placeholders for rendered metadata.
 
 Advanced GCOM capabilities:
@@ -908,6 +916,7 @@ COMMON FAILURE TRAPS
   Reason: a timeout on status query can be transport/runtime behavior; inspect terminal evidence before rewriting commands.
 - Wrong: increasing WAIT_FOR_LINE timeout when the expected line already arrived before WAIT_FOR_LINE started.
   Reason: WAIT_FOR_LINE matches new incoming lines only; it does not replay earlier consumed lines.
+- VAR placeholder substitution is type-aware: numeric values substitute bare; text values substitute as quoted escaped literals outside string literals, and as raw text inside string literals. Both "x{state}" and x & {state} are correct for text vars; do not write workarounds like manual quoting of the declaration.
 - Wrong: COS(angle * PI / 180)
   Reason: COS already expects degrees in GCOM.
 - Wrong: LET x = ... + x inside a loop when x is also the center/reference position.

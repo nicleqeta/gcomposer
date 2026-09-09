@@ -774,6 +774,16 @@
         <li><code>; DESCRIPTION: ...</code> can appear more than once. Repeated lines are joined into a multiline description in the app.</li>
         <li>Rendered descriptions support both simple placeholders like <code>{feed}</code> and inline expression placeholders like <code>{{min_batch_count * 2}}</code>.</li>
         <li><code>; VAR name=value</code> seeds a variable default. Placeholder names from the script or description are also added if they are missing.</li>
+        <li>
+          <strong>VAR value types and <code>{name}</code> substitution:</strong> a value that looks like a number
+          (<code>0.000</code>, <code>120</code>) is numeric; anything else is text. Wrap the value in quotes to declare
+          it as text even if it looks numeric (<code>; VAR part_no="1234"</code>).
+          <ul>
+            <li><strong>Outside string literals:</strong> numeric placeholders substitute bare (<code>WAIT {wait_ms}</code>); text placeholders substitute as a quoted, escaped string literal, so <code>VERIFY STATE() = {expected_state}</code> works when <code>expected_state</code> is <code>Idle</code>.</li>
+            <li><strong>Inside string literals:</strong> placeholders always substitute their raw text: <code>SEND "M3 S{power}"</code> and <code>"&lt;{expected_state}"</code> embed naturally without double quoting.</li>
+            <li>Values containing quotes or backslashes are escaped automatically at substitution.</li>
+          </ul>
+        </li>
         <li>If no title header exists, import falls back to the filename.</li>
         <li>Clipboard paste detects G-code patterns and can convert macros/subroutines into step-by-step GCOM automatically.</li>
       </ul>
