@@ -1004,7 +1004,10 @@
 60 LET best_mm_min = 0 : LET best_accel = 0
 61 LET best_dist = 0 : LET regress_count = 0
 62 LET global_accel = 0 : LET global_mm_min = 0
-65 PRINT "Cruise = $110 = " & v_max_rate & " mm/min (" & ROUND(max_x_velocity, 1) & " mm/s). Moves feed at F" & v_max_rate & "."
+63 REM Guard: SETTING() returns 0 on timeout (dead comms). Fail fast instead of
+64 REM sweeping with a zero feed ceiling and dividing by zero later.
+65 IF v_max_rate <= 0 THEN VERIFY 0 = 1, "max_rate_read_failed" HALT
+66 PRINT "Cruise = $110 = " & v_max_rate & " mm/min (" & ROUND(max_x_velocity, 1) & " mm/s). Moves feed at F" & v_max_rate & "."
 90 STATUS
 92 WAIT v_settle_ms
 94 SEND "G21" TIMEOUT 3000 REQUIRE_OK
@@ -1058,6 +1061,7 @@
 1079 LET peak_mm_min = ROUND(MIN(v_max_rate, SQRT(current_accel * current_distance) * 60), 1)
 1080 REM CLAMP bounds the theoretical cruise velocity to the legal feed range (0..$110)
 1081 LET cruise_feed = CLAMP(SQRT(current_accel * current_distance) * 60, 0, v_max_rate)
+1083 IF current_accel <= 0 THEN GOTO 1098
 1085 LET ramp_up_mm = ROUND(cruise_feed * cruise_feed / 3600 / (2 * current_accel), 2)
 1086 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate & " mm_per_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min & " ramp_up_mm=" & ramp_up_mm
 1087 REM Sanity gate: measured throughput cannot exceed the theoretical cruise velocity.
