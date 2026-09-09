@@ -7028,7 +7028,7 @@ function basicPromptInput(promptText) {
 }
 
 // Show confirm modal and wait for user decision
-function basicShowConfirm(configText, vars) {
+function basicShowConfirm(configText, vars, options = {}) {
   return new Promise((resolve) => {
     const fullText = String(configText || 'Run this script?');
     const blocks = fullText.split(/\n{2,}/).map(block => block.trim()).filter(Boolean);
@@ -7044,6 +7044,14 @@ function basicShowConfirm(configText, vars) {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+
+    // Optional overrides — used by VERIFY ASK so the dialog reads as a
+    // continue/cancel decision rather than a script run confirmation.
+    // Normal CONFIRM/run-startup callers keep the default title and Run button.
+    const titleEl = document.querySelector('#basic-confirm-overlay .basic-confirm-title');
+    const runBtn = document.getElementById('basic-confirm-run');
+    if (titleEl) titleEl.textContent = String(options.title || 'Run script?');
+    if (runBtn) runBtn.textContent = String(options.runLabel || 'Run');
 
     const mainHtml = escapeHtml(mainText);
     const moreInfoHtml = compileText
@@ -7065,6 +7073,9 @@ function basicShowConfirm(configText, vars) {
     basicConfirmResolver = (ok) => {
       basicConfirmOverlay.style.display = 'none';
       basicConfirmResolver = null;
+      // Restore defaults so later callers always get the standard dialog.
+      if (titleEl) titleEl.textContent = 'Run script?';
+      if (runBtn) runBtn.textContent = 'Run';
       resolve(ok);
     };
   });
@@ -8796,6 +8807,9 @@ async function runBasicScript(source) {
         const detailText = actualText != null || expectedText != null
           ? ` expected=${expectedText ?? '?'} actual=${actualText ?? '?'}`
           : '';
+        const detailLines = actualText != null || expectedText != null
+          ? `\nexpected = ${expectedText ?? '?'}\nactual = ${actualText ?? '?'}`
+          : '';
         basicChecks.set(verifySpec.label, {
           status: passed ? 'PASS' : 'FAIL',
           actual: actualText,
@@ -8810,9 +8824,9 @@ async function runBasicScript(source) {
             throw new Error(`VERIFY HALT: ${verifySpec.label}`);
           }
           if (verifySpec.mode === 'ASK') {
-            const askMessage = `Check failed: ${verifySpec.label}${detailText}\n\nContinue or cancel the script?`;
+            const askMessage = `Check failed: ${verifySpec.label}${detailLines}\n\nContinue or cancel the script?`;
             addLine(`VERIFY ASK: ${askMessage.split('\n')[0]}`, 'basic');
-            const confirmed = await basicShowConfirm(askMessage, {});
+            const confirmed = await basicShowConfirm(askMessage, {}, { title: 'Check failed', runLabel: 'Continue' });
             if (!confirmed) {
               requestBasicStop('VERIFY ASK declined; stopping script...', '--- Script stopped: VERIFY ASK declined ---');
               stopScript();
@@ -8890,6 +8904,9 @@ async function runBasicScript(source) {
               const detailText = actualText != null || expectedText != null
                 ? ` expected=${expectedText ?? '?'} actual=${actualText ?? '?'}`
                 : '';
+              const detailLines = actualText != null || expectedText != null
+                ? `\nexpected = ${expectedText ?? '?'}\nactual = ${actualText ?? '?'}`
+                : '';
               basicChecks.set(verifySpec.label, {
                 status: passed ? 'PASS' : 'FAIL',
                 actual: actualText,
@@ -8904,9 +8921,9 @@ async function runBasicScript(source) {
                   throw new Error(`VERIFY HALT: ${verifySpec.label}`);
                 }
                 if (verifySpec.mode === 'ASK') {
-                  const askMessage = `Check failed: ${verifySpec.label}${detailText}\n\nContinue or cancel the script?`;
+                  const askMessage = `Check failed: ${verifySpec.label}${detailLines}\n\nContinue or cancel the script?`;
                   addLine(`VERIFY ASK: ${askMessage.split('\n')[0]}`, 'basic');
-                  const confirmed = await basicShowConfirm(askMessage, {});
+                  const confirmed = await basicShowConfirm(askMessage, {}, { title: 'Check failed', runLabel: 'Continue' });
                   if (!confirmed) {
                     requestBasicStop('VERIFY ASK declined; stopping script...', '--- Script stopped: VERIFY ASK declined ---');
                     stopScript();
