@@ -4542,15 +4542,20 @@ function basicParseVerifyOptions(verifyBody) {
   const label = labelM[1].trim();
 
   // Extract the right-hand side of the top-level comparison for actual-value reporting.
+  // For AND/OR conditions, use the LAST logic operand so the reported actual value
+  // comes from a single comparison (evaluable as a plain expression) rather than
+  // trailing operands glued together (e.g. '"MPos" OR pos_type = "WPos"').
+  const logic = basicSplitConditionLogic(conditionExpr);
+  const actualSource = logic.parts.length > 1 ? logic.parts[logic.parts.length - 1] : conditionExpr;
   const condOps = ['<=', '>=', '<>', '<', '>', '='];
   let inStr = false;
   let actualExpr = null;
-  for (let i = 0; i < conditionExpr.length; i++) {
-    if (conditionExpr[i] === '"') { inStr = !inStr; continue; }
+  for (let i = 0; i < actualSource.length; i++) {
+    if (actualSource[i] === '"') { inStr = !inStr; continue; }
     if (inStr) continue;
     for (const op of condOps) {
-      if (conditionExpr.slice(i, i + op.length) === op) {
-        actualExpr = conditionExpr.slice(i + op.length).trim();
+      if (actualSource.slice(i, i + op.length) === op) {
+        actualExpr = actualSource.slice(i + op.length).trim();
         break;
       }
     }
