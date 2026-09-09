@@ -1042,7 +1042,7 @@
 880 GOTO 200
 
 1000 REM Precondition: never write $120 while the axis may still be moving
-1005 VERIFY STATE() = "Idle", "idle_before_setting" HALT
+1005 VERIFY UPPER(STATE()) = "IDLE", "idle_before_setting" HALT
 1010 SEND "$120=" & current_accel TIMEOUT 2000 REQUIRE_OK
 1020 WAIT v_settle_ms
 1025 PRINT "BENCH START distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
