@@ -309,6 +309,16 @@
     margin-bottom: 8px;
     white-space: pre-line;
   }
+  /* Validation box sits directly under the composer textarea. A fixed max
+     height with internal scrolling keeps its height stable while typing —
+     otherwise the error-list <-> pass-message swap changes sidebar content
+     height and the browser's scroll clamping yanks the view away from the
+     caret mid-edit. */
+  #basic-validation-box {
+    max-height: 132px;
+    overflow-y: auto;
+    overflow-wrap: break-word;
+  }
   .diag-box strong { color: var(--text); font-weight: 600; }
   .diag-box.muted { color: var(--text-muted); }
   .diag-box.error {
@@ -3559,27 +3569,6 @@ function refreshSidebarScrollArea({ remeasureBasicComposer = false } = {}) {
     const previousScrollTop = sidebar.scrollTop;
     const maxScrollTop = Math.max(0, sidebar.scrollHeight - sidebar.clientHeight);
     sidebar.scrollTop = Math.min(previousScrollTop, maxScrollTop);
-  });
-}
-
-// Keep an element visually anchored while sidebar layout changes around it.
-// Captures the element's viewport position immediately, then after layout
-// settles (rAF) compensates sidebar.scrollTop by the drift. This prevents
-// the visible jump when content above/below the element resizes — e.g.
-// typing in the GCOM composer while the async validation box re-renders
-// and the browser clamps the clamped scrollTop to a shrunken scrollHeight.
-let sidebarStabilizeFrame = 0;
-function stabilizeSidebarAroundElement(el) {
-  if (!sidebar || !el) return;
-  const anchorTop = el.getBoundingClientRect().top;
-  if (sidebarStabilizeFrame) cancelAnimationFrame(sidebarStabilizeFrame);
-  sidebarStabilizeFrame = requestAnimationFrame(() => {
-    sidebarStabilizeFrame = 0;
-    const nowTop = el.getBoundingClientRect().top;
-    const delta = nowTop - anchorTop;
-    if (Math.abs(delta) >= 1) {
-      sidebar.scrollTop -= delta;
-    }
   });
 }
 
@@ -9571,10 +9560,6 @@ if (applyGcomStarterBtn) {
 
 // Enable/disable run button based on connection and script content
 basicScriptInput.addEventListener('input', () => {
-  // Anchor the caret's visible position before any layout churn: the textarea
-  // auto-resize and the async validation-box re-render both change sidebar
-  // content height, and the browser's scroll clamping then shifts the view.
-  stabilizeSidebarAroundElement(basicScriptInput);
   autoResizeBasicScriptInput();
   refreshSidebarScrollArea();
   markBasicScriptStructuralDirty();
