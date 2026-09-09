@@ -4077,8 +4077,14 @@ function autoResizeBasicDescription() {
 function autoResizeBasicScriptInput() {
   const el = basicScriptInput;
   if (!el) return;
+  // Grow with content up to a fixed cap, then let the textarea scroll
+  // internally. Past the cap the element's height never changes, so typing
+  // no longer resizes the sidebar (which previously let the browser's
+  // scroll clamp bounce the visible view while editing).
+  const MAX_SCRIPT_BOX_PX = 320;
   el.style.height = 'auto';
-  el.style.height = el.scrollHeight + 'px';
+  el.style.height = Math.min(el.scrollHeight, MAX_SCRIPT_BOX_PX) + 'px';
+  el.style.overflowY = el.scrollHeight > MAX_SCRIPT_BOX_PX ? 'auto' : 'hidden';
 }
 
 function buildBasicOverrideEntries() {
