@@ -3547,7 +3547,6 @@ function startSidebarResize(event) {
 function refreshSidebarScrollArea({ remeasureBasicComposer = false } = {}) {
   if (!sidebar) return;
   if (sidebarLayoutRefreshFrame) cancelAnimationFrame(sidebarLayoutRefreshFrame);
-  const previousScrollTop = sidebar.scrollTop;
   sidebarLayoutRefreshFrame = requestAnimationFrame(() => {
     sidebarLayoutRefreshFrame = 0;
     if (remeasureBasicComposer && basicSection?.open) {
@@ -3555,6 +3554,12 @@ function refreshSidebarScrollArea({ remeasureBasicComposer = false } = {}) {
       autoResizeBasicScriptInput();
     }
     void sidebar.offsetHeight;
+    // Capture scroll AFTER layout changes so the clamp uses a fresh value.
+    // Capturing before the resize made typing in the composer clobber the
+    // sidebar scroll with a stale offset whenever async layout work (e.g.
+    // validation UI updates, textarea auto-resize) landed between capture
+    // and frame — the visible content would jump under the caret.
+    const previousScrollTop = sidebar.scrollTop;
     const maxScrollTop = Math.max(0, sidebar.scrollHeight - sidebar.clientHeight);
     sidebar.scrollTop = Math.min(previousScrollTop, maxScrollTop);
   });
