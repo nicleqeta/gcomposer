@@ -1045,15 +1045,15 @@
 1005 VERIFY STATE() = "Idle", "idle_before_setting" HALT
 1010 SEND "$120=" & current_accel TIMEOUT 2000 REQUIRE_OK
 1020 WAIT v_settle_ms
-1030 PRINT "BENCH START distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
-1025 LET t0 = CLOCK()
-1030 FOR pass_index = 1 TO v_batch
-1040 SEND "G1 X" & current_distance & " F" & v_max_rate BUFFERED
-1050 SEND "G1 X-" & current_distance & " F" & v_max_rate BUFFERED
-1060 NEXT pass_index
-1070 WAIT_IDLE v_idle_timeout
-1072 LET last_ms = ELAPSED(t0)
-1074 IF last_ms <= 0 THEN GOTO 1098
+1025 PRINT "BENCH START distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
+1030 LET t0 = CLOCK()
+1040 FOR pass_index = 1 TO v_batch
+1050 SEND "G1 X" & current_distance & " F" & v_max_rate BUFFERED
+1060 SEND "G1 X-" & current_distance & " F" & v_max_rate BUFFERED
+1062 NEXT pass_index
+1064 WAIT_IDLE v_idle_timeout
+1066 LET last_ms = ELAPSED(t0)
+1068 IF last_ms <= 0 THEN GOTO 1098
 1078 LET mm_per_min = ROUND(batch_travel * 60000 / last_ms, 1)
 1079 LET peak_mm_min = ROUND(MIN(v_max_rate, SQRT(current_accel * current_distance) * 60), 1)
 1080 REM CLAMP bounds the theoretical cruise velocity to the legal feed range (0..$110)
@@ -1063,15 +1063,16 @@
 1087 REM Sanity gate: measured throughput cannot exceed the theoretical cruise velocity.
 1088 REM If it does, the timing window failed (e.g. WAIT_IDLE returned early) — chart the
 1089 REM sample but EXCLUDE it from the detector so it cannot poison the running max.
-1090 IF mm_per_min > peak_mm_min THEN GOTO 1091
-1092 GOSUB 1200
-1093 PRINT "Measured distance=" & current_distance & " accel=" & current_accel & " took=" & FORMAT_MS(last_ms) & " throughput_mm_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min
+1090 IF mm_per_min > peak_mm_min THEN GOTO 1095
+1091 GOSUB 1200
+1092 PRINT "Measured distance=" & current_distance & " accel=" & current_accel & " took=" & FORMAT_MS(last_ms) & " throughput_mm_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min
 1094 RETURN
-1091 PRINT "GLITCH: measured " & mm_per_min & " exceeds theoretical peak " & peak_mm_min & " at accel=" & current_accel & " — excluded from detector."
-1092 RETURN
+1095 PRINT "GLITCH: measured " & mm_per_min & " exceeds theoretical peak " & peak_mm_min & " at accel=" & current_accel & " — excluded from detector."
+1096 RETURN
+1097 RETURN
 1098 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
 1099 PRINT "Miss (zero ms) at accel=" & current_accel & "; not charted."
-1097 RETURN
+1100 RETURN
 
 1200 REM Stability detector — two-sample smoothed throughput vs running max.
 1210 REM First sample: seed baseline, no comparison yet.
