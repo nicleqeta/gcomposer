@@ -957,11 +957,11 @@
       </p>
       <pre><code>; TITLE: X-Axis Acceleration Throughput Sweep
 ; AUTHOR: NicholasL
-; VERSION: 13
+; VERSION: 14
 ; DESCRIPTION: Sweeps $120 from {start_accel} to {max_accel} in {accel_step} steps at doubling stroke lengths from 1 mm up to {max_distance} mm.
 ; DESCRIPTION: Feed and cruise ceiling both come from $110 (X max rate) — no separate feed variable. Fixed batch of {batch} passes per step.
 ; DESCRIPTION: Stops each distance at the stability edge — when smoothed throughput falls {drop_pct}% below the running max — and stops the whole sweep once a stroke reaches cruise (run-up = v^2/accel).
-; VAR start_accel=400
+; DESCRIPTION: Sanity-gated: throughput readings above the theoretical cruise velocity are charted but excluded from the detector, and $120 writes are gated on machine Idle.; VAR start_accel=400
 ; VAR accel_step=200
 ; VAR max_accel=8000
 ; VAR batch=4
@@ -1041,9 +1041,11 @@
 870 LET current_distance = current_distance * 2
 880 GOTO 200
 
-1000 SEND "$120=" & current_accel TIMEOUT 2000 REQUIRE_OK
-1010 WAIT v_settle_ms
-1020 PRINT "BENCH START distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
+1000 REM Precondition: never write $120 while the axis may still be moving
+1005 VERIFY STATE() = "Idle", "idle_before_setting" HALT
+1010 SEND "$120=" & current_accel TIMEOUT 2000 REQUIRE_OK
+1020 WAIT v_settle_ms
+1030 PRINT "BENCH START distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
 1025 LET t0 = CLOCK()
 1030 FOR pass_index = 1 TO v_batch
 1040 SEND "G1 X" & current_distance & " F" & v_max_rate BUFFERED
@@ -1051,18 +1053,24 @@
 1060 NEXT pass_index
 1070 WAIT_IDLE v_idle_timeout
 1072 LET last_ms = ELAPSED(t0)
-1074 IF last_ms <= 0 THEN GOTO 1095
+1074 IF last_ms <= 0 THEN GOTO 1098
 1078 LET mm_per_min = ROUND(batch_travel * 60000 / last_ms, 1)
 1079 LET peak_mm_min = ROUND(MIN(v_max_rate, SQRT(current_accel * current_distance) * 60), 1)
 1080 REM CLAMP bounds the theoretical cruise velocity to the legal feed range (0..$110)
 1081 LET cruise_feed = CLAMP(SQRT(current_accel * current_distance) * 60, 0, v_max_rate)
 1085 LET ramp_up_mm = ROUND(cruise_feed * cruise_feed / 3600 / (2 * current_accel), 2)
 1086 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate & " mm_per_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min & " ramp_up_mm=" & ramp_up_mm
-1087 GOSUB 1200
-1088 PRINT "Measured distance=" & current_distance & " accel=" & current_accel & " took=" & FORMAT_MS(last_ms) & " throughput_mm_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min
-1090 RETURN
-1095 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
-1096 PRINT "Miss (zero ms) at accel=" & current_accel & "; not charted."
+1087 REM Sanity gate: measured throughput cannot exceed the theoretical cruise velocity.
+1088 REM If it does, the timing window failed (e.g. WAIT_IDLE returned early) — chart the
+1089 REM sample but EXCLUDE it from the detector so it cannot poison the running max.
+1090 IF mm_per_min > peak_mm_min THEN GOTO 1091
+1092 GOSUB 1200
+1093 PRINT "Measured distance=" & current_distance & " accel=" & current_accel & " took=" & FORMAT_MS(last_ms) & " throughput_mm_min=" & mm_per_min & " peak_mm_min=" & peak_mm_min
+1094 RETURN
+1091 PRINT "GLITCH: measured " & mm_per_min & " exceeds theoretical peak " & peak_mm_min & " at accel=" & current_accel & " — excluded from detector."
+1092 RETURN
+1098 PRINT "BENCH END distance=" & current_distance & " accel=" & current_accel & " batch=" & v_batch & " repeat=1 feed=" & v_max_rate
+1099 PRINT "Miss (zero ms) at accel=" & current_accel & "; not charted."
 1097 RETURN
 
 1200 REM Stability detector — two-sample smoothed throughput vs running max.
