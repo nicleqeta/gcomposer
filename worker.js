@@ -717,6 +717,9 @@ Math: ABS INT ROUND(v,d) SQRT SIN COS TAN ASIN ACOS ATAN ATAN2(y,x) RAD DEG RND(
 String: STR(expr) LEN(text) TRIM(text) UPPER(text) LOWER(text)
     SUBSTR(text,start[,length]) CONTAINS(text,needle) STARTS_WITH(text,prefix)
     ENDS_WITH(text,suffix) REPLACE(text,find,with[,max])
+String escapes in literals: \n newline, \t tab, \\ backslash, \" and \' literal quotes.
+    Unknown escapes (\d, \[, \s...) pass through unchanged (regex-safe for WAIT_FOR_LINE).
+    In FORM() messages use \, for a literal comma and \n for a line break.
 Tokenization: SPLIT_COUNT(text,delim) SPLIT_PART(text,delim,index[,fallback])
      SPLIT_INTO(text,delim,prefix)
 State/Runtime: STATE() CLOCK() ELAPSED() BF_SERIAL() BF_PLANNER() GCODE_PARAM(key[,fallback]) FORMAT_MS(ms) BENCH_LAST_MS()
@@ -845,6 +848,9 @@ STRING AND TOKEN HELPERS
 - SPLIT_PART(text, delim, index[, fallback]) is 1-based token lookup.
 - SPLIT_COUNT returns token count for a delimiter.
 - SPLIT_INTO(text, delim, prefix) writes prefix_COUNT and prefix_1..prefix_N variables.
+- String literal escapes: \n newline, \t tab, \\ backslash, \" and \' literal quotes.
+  Unknown escapes pass through unchanged so regex patterns (e.g. "\\[VER:") stay intact.
+  In FORM() messages: \, embeds a literal comma; \n adds a line break.
 
 ARC / CIRCLE RULES (G2/G3)
 - Prefer center-format arcs (I/J) over radius-format (R) when possible; center format is more stable.

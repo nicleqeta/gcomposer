@@ -5931,7 +5931,11 @@ function basicTokenize(expr) {
       let value = '';
       while (j < expr.length && expr[j] !== quote) {
         if (expr[j] === '\\' && j + 1 < expr.length) {
-          value += expr[j + 1];
+          const esc = expr[j + 1];
+          if (esc === 'n') value += '\n';
+          else if (esc === 't') value += '\t';
+          else if (esc === '\\' || esc === '"' || esc === "'") value += esc;
+          else value += '\\' + esc;   // keep \d, \[, \s etc. intact for regex patterns
           j += 2;
           continue;
         }

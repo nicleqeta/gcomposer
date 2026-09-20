@@ -263,6 +263,7 @@
       <h2>1. Data And Variables</h2>
       <ul>
         <li><code>LET name = expr</code>: Assign expression result to a variable.</li>
+        <li><strong>String escapes</strong>: inside string literals, <code>\n</code> is a newline, <code>\t</code> is a tab, <code>\\</code> a literal backslash, and <code>\"</code>/<code>\'</code> a literal quote. Unknown escapes (e.g. <code>\d</code>, <code>\[</code>) pass through unchanged so regex patterns in <code>WAIT_FOR_LINE()</code> keep working.</li>
         <li><code>READ("$30") INTO name</code> or <code>LET name = READ("$30")</code>: Read a GRBL setting from <code>$$</code>.</li>
         <li><code>SETTING("$30") INTO name</code> or <code>LET name = SETTING("$30")</code>: Alias for <code>READ</code>.</li>
         <li><code>INPUT name</code>, <code>INPUT name, "Prompt"</code>, <code>name = INPUT("Prompt")</code>, <code>LET name = INPUT("Prompt")</code>: Ask user for input via a text field.</li>
@@ -275,6 +276,7 @@
         Numbers are implicitly converted to text &mdash; <code>STR()</code> is optional inside the message.
         The remaining comma-separated arguments are the numeric values each button returns, matched left-to-right with the labels.
         Use <code>\,</code> to embed a literal comma in the message without splitting the argument list.
+        Use <code>\n</code> for a line break and <code>\t</code> for a tab inside the message text.
       </p>
       <p>Two forms are supported:</p>
       <ul>
@@ -962,6 +964,7 @@
 ; DESCRIPTION: Feed and cruise ceiling both come from $110 (X max rate) — no separate feed variable. Fixed batch of {batch} passes per step.
 ; DESCRIPTION: Stops each distance at the stability edge — when smoothed throughput falls {drop_pct}% below the running max — and stops the whole sweep once a stroke reaches cruise (run-up = v^2/accel).
 ; DESCRIPTION: Sanity-gated: throughput readings above the theoretical cruise velocity are charted but excluded from the detector, and $120 writes are gated on machine Idle.; VAR start_accel=400
+; VAR start_accel=400
 ; VAR accel_step=200
 ; VAR max_accel=8000
 ; VAR batch=4
