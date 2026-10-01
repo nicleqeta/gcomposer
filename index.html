@@ -1017,6 +1017,14 @@
     box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.18);
     background: #1b2e33;
   }
+  #gcode-section.drop-open .section-toggle { color: var(--teal); }
+  #gcode-section.drop-open .section-content { box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.18); }
+  #gcode-save-arcs-btn.drag-over {
+    border-color: var(--teal);
+    box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.25);
+    background: #1b2e33;
+  }
+  #gcode-save-arcs-btn:disabled { opacity: 0.5; }
   /* GCode Queue panel in terminal column */
   .gcode-queue-panel {
     flex-shrink: 0;
@@ -2049,6 +2057,8 @@ $I" title="Enter up to 10 commands, one per line."></textarea>
         <div class="diag-actions" style="margin-bottom:8px;">
           <button class="btn" id="gcode-preview-btn" type="button" disabled>Preview</button>
           <button class="btn primary" id="gcode-add-btn" type="button" disabled>Add to Queue</button>
+          <button class="btn" id="gcode-save-arcs-btn" type="button" disabled
+                  title="Fit arcs into the G-code and save as a new file (original untouched). You can also drop a .gcode/.nc file directly on this button.">Save with Arcs</button>
         </div>
         <button class="btn" id="gcode-clear-btn" type="button" style="margin-bottom:8px;">Clear</button>
       </div>
@@ -2433,6 +2443,7 @@ let _terminalFlushId = 0;
 let _renderedPlainLines = [];
 let _lastPreviewPost = 0;
 let _previewPostPending = false;
+let _previewWindowJustOpened = false;
 let _copyLogHasContent = false;
 let _lastBenchmarkPreviewSampleCount = -1;
 let _lastBenchmarkPreviewActiveCount = -1;
@@ -2862,6 +2873,12 @@ let gcodeRunning     = false;
 let gcodeActiveJobId = null;
 let gcodeJobCounter  = 0;
 let gcodeJobAbort    = null;
+let gcodeProcessWorker = null;
+let gcodeProcessWorkerReady = false;
+const pendingGcodeProcessRequests = new Map();
+let gcodeProcessRequestSeq = 0;
+const GCODE_FIT_ARC_TOLERANCE_MM = 0.01;
+const GCODE_FIT_ARC_MIN_POINTS = 6;
 const BASIC_CONTROL_POLL_MS = 20;
 const BASIC_MAX_INSTRS      = 1_000_000; // hard instruction limit per run
 const BASIC_TIMEOUT_MS      = 36_000_000; // hard wall-clock limit per run (ms)
@@ -3047,6 +3064,7 @@ function syncRuntimeWorkerControlState() {
 
 function initBenchmarkRuntimeWorker() {
   if (!('Worker' in window)) return;
+  initGcodeProcessWorker();
   try {
     benchmarkRuntimeWorker = new Worker('./benchmark-runtime-worker.js');
     benchmarkRuntimeWorker.addEventListener('message', event => {
@@ -8198,12 +8216,18 @@ function ensurePreviewWindow(options = {}) {
   }
   previewPopupBlockedNotified = false;
   previewWindowCompact = compact;
+  // Fresh window: it will request the timeline via 'preview-ready'. Callers should
+  // skip their immediate post to avoid cloning the timeline twice.
+  _previewWindowJustOpened = true;
   return previewWindowRef;
 }
 
 function postLatestPreviewTimeline() {
   if (!latestPreviewTimeline) return;
   if (!previewWindowRef || previewWindowRef.closed) return;
+  // A freshly opened window posts 'preview-ready' once loaded; the handler below
+  // posts the timeline then. Posting here too would clone the payload twice.
+  if (_previewWindowJustOpened) return;
   const now = Date.now();
   // Throttle preview updates to at most ~6 fps during rapid benchmark updates
   if (now - _lastPreviewPost < PREVIEW_POST_THROTTLE_MS) {
@@ -8272,6 +8296,7 @@ window.addEventListener('message', event => {
     return;
   }
   if (event.data.type === 'preview-ready' || event.data.type === 'preview-request-timeline') {
+    _previewWindowJustOpened = false;
     if (previewWaitingState) {
       postPreviewWaitingState(previewWaitingState);
       return;
@@ -9180,6 +9205,154 @@ async function runBasicScript(source) {
 
 // --------------- GCode Queue ---------------
 
+// --------------- GCode processing worker (arc fitting etc.) ---------------
+
+function initGcodeProcessWorker() {
+  if (!('Worker' in window) || gcodeProcessWorker) return;
+  try {
+    gcodeProcessWorker = new Worker('./gcode-process-worker.js');
+    gcodeProcessWorker.addEventListener('message', event => {
+      const message = event.data || {};
+      if (message.type === 'process-worker-ready') {
+        gcodeProcessWorkerReady = true;
+        return;
+      }
+      if (message.type === 'fit-arcs-result') {
+        const pending = pendingGcodeProcessRequests.get(message.requestId);
+        if (!pending) return;
+        pendingGcodeProcessRequests.delete(message.requestId);
+        pending.resolve(message);
+      }
+    });
+    gcodeProcessWorker.addEventListener('error', error => {
+      console.warn('GCode process worker failed; arc fitting disabled.', error);
+      gcodeProcessWorkerReady = false;
+      gcodeProcessWorker = null;
+      pendingGcodeProcessRequests.forEach(pending => pending.reject(new Error('process worker failed')));
+      pendingGcodeProcessRequests.clear();
+    });
+  } catch (error) {
+    console.warn('Could not start GCode process worker.', error);
+    gcodeProcessWorker = null;
+  }
+}
+
+function requestFitArcs(lines, toleranceMm, minPoints) {
+  return new Promise((resolve, reject) => {
+    if (!gcodeProcessWorker || !gcodeProcessWorkerReady) {
+      reject(new Error('Process worker not available'));
+      return;
+    }
+    const requestId = `fit-${++gcodeProcessRequestSeq}`;
+    pendingGcodeProcessRequests.set(requestId, { resolve, reject });
+    gcodeProcessWorker.postMessage({
+      type: 'fit-arcs',
+      requestId,
+      lines,
+      toleranceMm: toleranceMm || GCODE_FIT_ARC_TOLERANCE_MM,
+      minPoints: minPoints || GCODE_FIT_ARC_MIN_POINTS
+    });
+  });
+}
+
+async function fitArcsForJob(jobId) {
+  const job = gcodeQueue.find(function(j) { return j.id === jobId; });
+  if (!job) return;
+  if (gcodeRunning) { addLine('Cannot fit arcs while a job is running', 'err'); return; }
+  if (!gcodeProcessWorkerReady) {
+    addLine('Arc fitting unavailable: process worker not ready', 'err');
+    return;
+  }
+  addLine(`Arc fitting: ${job.label} (tolerance ${GCODE_FIT_ARC_TOLERANCE_MM}mm)...`, 'sys');
+  try {
+    const result = await requestFitArcs(job.lines, GCODE_FIT_ARC_TOLERANCE_MM, GCODE_FIT_ARC_MIN_POINTS);
+    const report = result.report || {};
+    if (report.error) {
+      addLine('Arc fitting failed: ' + report.error, 'err');
+      return;
+    }
+    if (!report.arcsCreated) {
+      addLine('Arc fitting: no arc chains found within tolerance — job unchanged', 'warn');
+      return;
+    }
+    // Add fitted output as a NEW job; original is never modified
+    const fittedRaw = result.lines.join('\n');
+    const id = ++gcodeJobCounter;
+    const label = job.label.replace(/ \(\d+ lines?\)$/, '') + ' - Fitted (' + result.lines.length + ' lines)';
+    gcodeQueue.push({
+      id, label, raw: fittedRaw, lines: result.lines,
+      mode: job.mode, status: 'pending', error: null,
+      fittedFrom: job.id,
+      fitReport: {
+        arcsCreated: report.arcsCreated,
+        linearMovesMerged: report.linearMovesMerged,
+        maxDeviationMm: report.maxDeviationMm,
+        toleranceMm: report.toleranceMm
+      }
+    });
+    renderGcodeQueue();
+    addLine(`Arc fitting done: ${report.arcsCreated} arc(s) replaced ${report.linearMovesMerged} linear move(s), ` +
+            `max deviation ${report.maxDeviationMm.toFixed(4)}mm. Added as new job: ${label}`, 'sys');
+  } catch (error) {
+    addLine('Arc fitting failed: ' + (error && error.message ? error.message : String(error)), 'err');
+  }
+}
+
+function saveGcodeJobToFile(jobId) {
+  const job = gcodeQueue.find(function(j) { return j.id === jobId; });
+  if (!job) return;
+  downloadGcodeText(job.raw, suggestedGcodeFileName(job.label, '.gcode'));
+}
+
+// Derive a safe filename from a label, preserving an extension
+function suggestedGcodeFileName(label, fallbackExt) {
+  const safe = String(label).replace(/[^a-z0-9_\- .]/gi, '').trim().replace(/\s+/g, '_') || 'gcode_job';
+  return /\.[a-z0-9]+$/i.test(safe) ? safe : safe + (fallbackExt || '.gcode');
+}
+
+function downloadGcodeText(text, filename) {
+  const blob = new Blob([text + '\n'], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+// Fit arcs into the current GCode input and download as <name>_ARC.<ext>.
+// The original file/text is never modified.
+async function saveGcodeInputWithArcs(rawText, sourceName) {
+  if (!rawText || !rawText.trim()) { addLine('Save with Arcs: no G-code to process', 'err'); return; }
+  if (!gcodeProcessWorkerReady) { addLine('Save with Arcs unavailable: process worker not ready', 'err'); return; }
+  const lines = gcodeNormalizeLines(rawText);
+  if (!lines.length) { addLine('Save with Arcs: no valid commands', 'err'); return; }
+  addLine(`Arc fitting ${lines.length} line(s)${sourceName ? ' from ' + sourceName : ''}...`, 'sys');
+  try {
+    const result = await requestFitArcs(lines, GCODE_FIT_ARC_TOLERANCE_MM, GCODE_FIT_ARC_MIN_POINTS);
+    const report = result.report || {};
+    if (report.error) { addLine('Save with Arcs failed: ' + report.error, 'err'); return; }
+    if (!report.arcsCreated) {
+      addLine('Save with Arcs: no arc chains found within tolerance — file not written', 'warn');
+      return;
+    }
+    // Build output name: same extension, _ARC suffix before it
+    const baseName = String(sourceName || 'gcode')
+      .replace(/\.[^.]+$/, '')      // strip extension
+      .replace(/[^a-z0-9_\- ]/gi, '').trim().replace(/\s+/g, '_') || 'gcode';
+    const extMatch = String(sourceName || '').match(/\.[^.]+$/);
+    const ext = extMatch ? extMatch[0] : '.gcode';
+    const outName = `${baseName}_ARC${ext}`;
+    downloadGcodeText(result.lines.join('\n'), outName);
+    addLine(`Save with Arcs: ${report.arcsCreated} arc(s) replaced ${report.linearMovesMerged} linear move(s), ` +
+            `max deviation ${Number(report.maxDeviationMm).toFixed(4)}mm. Saved as ${outName}`, 'sys');
+  } catch (error) {
+    addLine('Save with Arcs failed: ' + (error && error.message ? error.message : String(error)), 'err');
+  }
+}
+
 function gcodeEscHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -9236,6 +9409,8 @@ function renderGcodeQueue() {
   const hasInput = Boolean(gcodeInputEl.value.trim());
   gcodeAddBtn.disabled = !hasInput || gcodeRunning;
   gcodePreviewBtn.disabled = !hasInput;
+  const saveArcsBtn = document.getElementById('gcode-save-arcs-btn');
+  if (saveArcsBtn) saveArcsBtn.disabled = !hasInput;
   const pendingCount = gcodeQueue.filter(function(j) { return j.status === 'pending'; }).length;
   gcodeQueueRunBtn.disabled = gcodeRunning || basicRunning || !port || pendingCount === 0;
   if (!gcodeQueue.length) {
@@ -9262,6 +9437,8 @@ function renderGcodeQueue() {
         '<span class="gcode-queue-badge" data-badge></span>' +
         '<div class="gcode-queue-row-actions">' +
           '<button class="gcode-queue-action" data-action="preview" data-job-id="' + job.id + '">Preview</button>' +
+          '<button class="gcode-queue-action" data-action="fit" data-job-id="' + job.id + '">Fit Arcs</button>' +
+          '<button class="gcode-queue-action" data-action="save" data-job-id="' + job.id + '">Save</button>' +
           '<button class="gcode-queue-action" data-action="run" data-job-id="' + job.id + '">Run</button>' +
           '<button class="gcode-queue-action" data-action="remove" data-job-id="' + job.id + '">Remove</button>' +
         '</div>';
@@ -9340,6 +9517,8 @@ function handleGcodeQueueAction(e) {
   if (!job) return;
   if (action === 'remove')       removeGcodeJob(jobId);
   else if (action === 'preview') openGcodeJobPreview(job);
+  else if (action === 'fit')     { void fitArcsForJob(jobId); }
+  else if (action === 'save')    saveGcodeJobToFile(jobId);
   else if (action === 'run')     { void runSingleGcodeJob(job); }
 }
 
@@ -9550,6 +9729,75 @@ gcodeAddBtn.addEventListener('click', function() {
 gcodePreviewBtn.addEventListener('click', openGcodeInputPreview);
 gcodeQueueRunBtn.addEventListener('click', function() { void runGcodeQueue(); });
 gcodeQueueClearBtn.addEventListener('click', clearGcodeQueue);
+
+// ---- Save with Arcs button (also a direct file drop target) ----
+
+const gcodeSaveArcsBtn = document.getElementById('gcode-save-arcs-btn');
+
+gcodeSaveArcsBtn.addEventListener('click', function() {
+  void saveGcodeInputWithArcs(gcodeInputEl.value, null);
+});
+
+// Drop a gcode file directly on the button: fit + save immediately, without
+// loading it into the textarea.
+gcodeSaveArcsBtn.addEventListener('dragenter', function(event) {
+  if (event.dataTransfer && Array.from(event.dataTransfer.types).includes('Files')) {
+    event.preventDefault();
+    gcodeSaveArcsBtn.classList.add('drag-over');
+  }
+});
+gcodeSaveArcsBtn.addEventListener('dragover', function(event) {
+  if (event.dataTransfer && Array.from(event.dataTransfer.types).includes('Files')) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    gcodeSaveArcsBtn.classList.add('drag-over');
+  }
+});
+gcodeSaveArcsBtn.addEventListener('dragleave', function(event) {
+  if (event.target === gcodeSaveArcsBtn) gcodeSaveArcsBtn.classList.remove('drag-over');
+});
+gcodeSaveArcsBtn.addEventListener('drop', function(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  gcodeSaveArcsBtn.classList.remove('drag-over');
+  const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length
+    ? event.dataTransfer.files[0]
+    : null;
+  if (!file) return;
+  void file.text().then(function(text) {
+    void saveGcodeInputWithArcs(text, file.name);
+  }).catch(function(e) {
+    addLine('Could not read dropped file: ' + (e && e.message ? e.message : String(e)), 'err');
+  });
+});
+
+// ---- GCode section: dragging a file anywhere over the section auto-opens it ----
+
+let _gcodeSectionDragDepth = 0;
+
+gcodeSection.addEventListener('dragenter', function(event) {
+  if (!event.dataTransfer || !Array.from(event.dataTransfer.types).includes('Files')) return;
+  _gcodeSectionDragDepth += 1;
+  if (_gcodeSectionDragDepth === 1) {
+    gcodeSection.open = true; // auto-open so the textarea drop target is visible
+    gcodeSection.classList.add('drop-open');
+  }
+});
+gcodeSection.addEventListener('dragleave', function(event) {
+  if (!event.dataTransfer || !Array.from(event.dataTransfer.types).includes('Files')) return;
+  _gcodeSectionDragDepth = Math.max(0, _gcodeSectionDragDepth - 1);
+  if (_gcodeSectionDragDepth === 0) gcodeSection.classList.remove('drop-open');
+});
+gcodeSection.addEventListener('drop', function(event) {
+  _gcodeSectionDragDepth = 0;
+  gcodeSection.classList.remove('drop-open');
+  // Drops on the textarea / Save button handle themselves; this catches drops on
+  // the section header or padding and routes them to the textarea loader.
+  if (event.target === gcodeInputEl || event.target === gcodeSaveArcsBtn) return;
+  if (!event.dataTransfer || !event.dataTransfer.files || !event.dataTransfer.files.length) return;
+  event.preventDefault();
+  void loadDroppedGcodeFile(event.dataTransfer.files[0]);
+});
 gcodeQueueList.addEventListener('click', handleGcodeQueueAction);
 
 basicStopBtn.addEventListener('click', () => {

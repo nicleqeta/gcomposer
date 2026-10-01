@@ -140,6 +140,7 @@
     padding: 0;
     overflow-y: auto;
     flex: 1;
+    position: relative;
     font-family: Consolas, 'Courier New', monospace;
     font-size: 12px;
     line-height: 1.35;
@@ -184,12 +185,19 @@
   }
 
   .command-item {
+    position: absolute;
+    left: 0;
+    right: 0;
     border-bottom: 1px solid rgba(46, 51, 71, 0.35);
-    padding: 6px 10px;
+    padding: 0 10px;
     cursor: pointer;
     color: var(--muted);
-    white-space: pre-wrap;
-    word-break: break-word;
+    height: 24px;
+    line-height: 23px;
+    box-sizing: border-box;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .command-item:hover { background: rgba(34, 38, 58, 0.6); }
@@ -395,6 +403,13 @@ const queueStatus = document.getElementById('queue-status');
 let timeline = null;
 let commandItems = [];
 let lastActiveCommandId = -1;
+// Virtualized command list state
+const COMMAND_ROW_HEIGHT = 24;   // must match .command-item CSS height
+const COMMAND_WINDOW_BUFFER = 10; // extra rows rendered above/below the viewport
+let virtualRange = { start: 0, end: 0 };
+let virtualMode = null;          // 'commands' | 'benchmark' | null
+let virtualCount = 0;            // total rows in current mode
+let virtualSpacer = null;        // <li> that reserves scroll height
 let selectedCommandIds = new Set();
 let selectedBenchmarkSampleIndexes = new Set();
 let lastClickedCommandId = null;
@@ -1122,8 +1137,13 @@ function updateCommandListActive(previousCommandId, nextCommandId, shouldScroll 
   if (!commandItems.length) return;
   if (previousCommandId === nextCommandId) return;
   const prevItem = commandItems[previousCommandId];
-  if (prevItem) prevItem.classList.remove('active');
-  const nextItem = commandItems[nextCommandId];
+  if (prevItem && prevItem.parentNode === commandList) prevItem.classList.remove('active');
+  let nextItem = commandItems[nextCommandId];
+  if ((!nextItem || nextItem.parentNode !== commandList) && shouldScroll && virtualCount > 0) {
+    // Active row is outside the rendered window — re-render the window around it
+    ensureVirtualWindow(nextCommandId);
+    nextItem = commandItems[nextCommandId];
+  }
   if (nextItem) {
     nextItem.classList.add('active');
     if (shouldScroll) requestAnimationFrame(() => nextItem.scrollIntoView({ block: 'nearest' }));
@@ -1131,8 +1151,117 @@ function updateCommandListActive(previousCommandId, nextCommandId, shouldScroll 
   lastActiveCommandId = nextCommandId;
 }
 
+// Build the display label for a command row (shared by virtual renderer)
+function commandRowLabel(command) {
+  const sourceLabel = command.sourceLine ? `L${command.sourceLine}` : 'GEN';
+  const segmentLabel = command.firstSegment === -1
+    ? 'non-motion'
+    : `seg ${command.firstSegment + 1}-${command.lastSegment + 1}`;
+  return `${String(command.commandId + 1).padStart(4, '0')} | ${sourceLabel} | ${segmentLabel} | ${command.display || command.raw}`;
+}
+
+// Create or recycle a row element inside the window
+function acquireVirtualRow(index) {
+  let item = commandItems[index];
+  if (!item) {
+    item = document.createElement('li');
+    commandItems[index] = item;
+  }
+  return item;
+}
+
+// Render rows [start, end) into the list, recycling elements.
+// mode: 'commands' (timeline.commands) or 'benchmark' (reversed sample list)
+function renderVirtualWindow(start, end) {
+  const clampedStart = Math.max(0, start);
+  const clampedEnd = Math.min(virtualCount, end);
+  virtualRange.start = clampedStart;
+  virtualRange.end = clampedEnd;
+
+  // Detach rows that fall outside the new window so the DOM stays small
+  const keep = new Set();
+  for (let i = clampedStart; i < clampedEnd; i += 1) {
+    const item = acquireVirtualRow(i);
+    if (item.parentNode !== commandList) commandList.appendChild(item);
+    keep.add(item);
+  }
+  Array.from(commandList.children).forEach(child => {
+    if (child !== virtualSpacer && !keep.has(child)) child.remove();
+  });
+
+  if (virtualMode === 'commands') {
+    for (let i = clampedStart; i < clampedEnd; i += 1) {
+      const command = timeline.commands[i];
+      if (!command) continue;
+      const item = acquireVirtualRow(i);
+      item.style.top = `${i * COMMAND_ROW_HEIGHT}px`;
+      item.className = `command-item${command.commandId === playback.commandCursor ? ' active' : ''}${selectedCommandIds.has(i) ? ' selected' : ''}`;
+      item.dataset.commandId = String(command.commandId);
+      delete item.dataset.benchmarkSampleIndex;
+      const label = commandRowLabel(command);
+      if (item.textContent !== label) item.textContent = label;
+      item.title = label;
+    }
+  } else if (virtualMode === 'benchmark') {
+    const benchSamples = getBenchmarkSamples();
+    for (let i = clampedStart; i < clampedEnd; i += 1) {
+      const sampleIndex = virtualCount - 1 - i; // reversed order, matches old behavior
+      const sample = benchSamples[sampleIndex];
+      if (!sample) continue;
+      const item = acquireVirtualRow(i);
+      item.style.top = `${i * COMMAND_ROW_HEIGHT}px`;
+      item.className = `command-item${selectedBenchmarkSampleIndexes.has(sampleIndex) ? ' selected' : ''}`;
+      item.dataset.benchmarkSampleIndex = String(sampleIndex);
+      delete item.dataset.commandId;
+      const label = renderBenchmarkTapeLabel(sample, sampleIndex, getBenchmarkRecordTemplates());
+      if (item.textContent !== label) item.textContent = label;
+      item.title = label;
+    }
+  }
+}
+
+// Ensure the window covers rowIndex; re-render if needed
+function ensureVirtualWindow(rowIndex) {
+  if (virtualMode === null || virtualCount === 0) return;
+  const viewportHeight = commandList.clientHeight || 400;
+  const visibleRows = Math.ceil(viewportHeight / COMMAND_ROW_HEIGHT);
+  let start;
+  if (rowIndex == null) {
+    start = Math.floor(commandList.scrollTop / COMMAND_ROW_HEIGHT);
+  } else {
+    start = rowIndex - Math.floor(visibleRows / 2);
+  }
+  start = Math.max(0, Math.min(virtualCount - visibleRows, start));
+  const end = Math.min(virtualCount, start + visibleRows + COMMAND_WINDOW_BUFFER * 2);
+  if (rowIndex == null && start >= virtualRange.start && end <= virtualRange.end && virtualRange.end > virtualRange.start) return;
+  if (rowIndex != null && rowIndex >= virtualRange.start && rowIndex < virtualRange.end) return;
+  renderVirtualWindow(start, end);
+}
+
+function resetVirtualState() {
+  virtualRange = { start: 0, end: 0 };
+  virtualMode = null;
+  virtualCount = 0;
+  commandItems = [];
+  if (virtualSpacer) { virtualSpacer.remove(); virtualSpacer = null; }
+  commandList.innerHTML = '';
+}
+
+function setupVirtualSpacer(count) {
+  virtualCount = count;
+  if (!virtualSpacer) {
+    virtualSpacer = document.createElement('li');
+    virtualSpacer.style.listStyle = 'none';
+    virtualSpacer.style.border = 'none';
+    virtualSpacer.style.padding = '0';
+    virtualSpacer.style.pointerEvents = 'none';
+  }
+  virtualSpacer.style.height = `${count * COMMAND_ROW_HEIGHT}px`;
+  if (virtualSpacer.parentNode !== commandList) commandList.appendChild(virtualSpacer);
+}
+
 function renderCommandList() {
-  if (!timeline) { commandList.innerHTML = ''; commandItems = []; lastActiveCommandId = -1; _lastCommandListSampleCount = -1; return; }
+  if (!timeline) { resetVirtualState(); lastActiveCommandId = -1; _lastCommandListSampleCount = -1; return; }
 
     selectedCommandIds = new Set();
     lastClickedCommandId = null;
@@ -1141,79 +1270,29 @@ function renderCommandList() {
     // Skip full rebuild if sample count hasn't changed
     if (benchSamples.length === _lastCommandListSampleCount) return;
     _lastCommandListSampleCount = benchSamples.length;
-    commandList.innerHTML = '';
-    commandItems = [];
+    resetVirtualState();
     lastActiveCommandId = -1;
-    selectedCommandIds.clear();
-    lastClickedCommandId = null;
-    benchSamples.map((sample, sampleIndex) => ({ sample, sampleIndex })).reverse().forEach(({ sample, sampleIndex }) => {
-      const item = document.createElement('li');
-      item.className = 'command-item';
-      item.dataset.benchmarkSampleIndex = String(sampleIndex);
-      item.textContent = renderBenchmarkTapeLabel(sample, sampleIndex, getBenchmarkRecordTemplates());
-      item.addEventListener('click', (event) => {
-        selectedCommandIds.clear();
-        if (event.shiftKey && lastClickedBenchmarkSampleIndex != null) {
-          const lo = Math.min(lastClickedBenchmarkSampleIndex, sampleIndex);
-          const hi = Math.max(lastClickedBenchmarkSampleIndex, sampleIndex);
-          for (let id = lo; id <= hi; id += 1) selectedBenchmarkSampleIndexes.add(id);
-        } else if (event.ctrlKey || event.metaKey) {
-          if (selectedBenchmarkSampleIndexes.has(sampleIndex)) selectedBenchmarkSampleIndexes.delete(sampleIndex);
-          else selectedBenchmarkSampleIndexes.add(sampleIndex);
-        } else {
-          selectedBenchmarkSampleIndexes.clear();
-          selectedBenchmarkSampleIndexes.add(sampleIndex);
-        }
-        lastClickedBenchmarkSampleIndex = sampleIndex;
-        refreshSelectedStyles();
-        updateAiContextBar();
-      });
-      commandItems[sampleIndex] = item;
-      commandList.appendChild(item);
-    });
+    selectedBenchmarkSampleIndexes.clear();
+    lastClickedBenchmarkSampleIndex = null;
+    virtualMode = 'benchmark';
+    setupVirtualSpacer(benchSamples.length);
+    renderVirtualWindow(0, Math.ceil((commandList.clientHeight || 400) / COMMAND_ROW_HEIGHT) + COMMAND_WINDOW_BUFFER * 2);
     refreshSelectedStyles();
     updateAiContextBar();
     return;
   }
 
   _lastCommandListSampleCount = -1;
-  commandList.innerHTML = '';
-  commandItems = [];
+  resetVirtualState();
   lastActiveCommandId = -1;
   selectedBenchmarkSampleIndexes.clear();
   lastClickedBenchmarkSampleIndex = null;
   if (!timeline.commands.length) return;
 
     updateAiContextBar();
-  timeline.commands.forEach(command => {
-    const item = document.createElement('li');
-    item.className = `command-item${command.commandId === playback.commandCursor ? ' active' : ''}`;
-    item.dataset.commandId = String(command.commandId);
-    const sourceLabel = command.sourceLine ? `L${command.sourceLine}` : 'GEN';
-    const segmentLabel = command.firstSegment === -1
-      ? 'non-motion'
-      : `seg ${command.firstSegment + 1}-${command.lastSegment + 1}`;
-    item.textContent = `${String(command.commandId + 1).padStart(4, '0')} | ${sourceLabel} | ${segmentLabel} | ${command.display || command.raw}`;
-    item.addEventListener('click', (e) => {
-      setCommandCursor(command.commandId);
-      if (e.shiftKey && lastClickedCommandId != null) {
-        const lo = Math.min(lastClickedCommandId, command.commandId);
-        const hi = Math.max(lastClickedCommandId, command.commandId);
-        for (let id = lo; id <= hi; id += 1) selectedCommandIds.add(id);
-      } else if (e.ctrlKey || e.metaKey) {
-        if (selectedCommandIds.has(command.commandId)) selectedCommandIds.delete(command.commandId);
-        else selectedCommandIds.add(command.commandId);
-      } else {
-        selectedCommandIds.clear();
-        selectedCommandIds.add(command.commandId);
-      }
-      lastClickedCommandId = command.commandId;
-      refreshSelectedStyles();
-      updateAiContextBar();
-    });
-    commandList.appendChild(item);
-    commandItems[command.commandId] = item;
-  });
+  virtualMode = 'commands';
+  setupVirtualSpacer(timeline.commands.length);
+  renderVirtualWindow(0, Math.ceil((commandList.clientHeight || 400) / COMMAND_ROW_HEIGHT) + COMMAND_WINDOW_BUFFER * 2);
   updateCommandListActive(-1, playback.commandCursor, true);
 }
 
@@ -1321,8 +1400,7 @@ function loadWaitingState(payload = null) {
   setBenchmarkInfoText(`${waitingTitle}\nView: Benchmark\n${waitingMessage}`);
   emptyState.style.display = 'none';
   emptyState.innerHTML = '<strong>Waiting for benchmark data.</strong><br>Run a GCOM script with BENCH START / BENCH END markers.';
-  commandList.innerHTML = '';
-  commandItems = [];
+  resetVirtualState();
   lastActiveCommandId = -1;
   commandProgress.textContent = '0 / 0';
   benchmarkTapePanel.classList.remove('active');
@@ -1359,7 +1437,7 @@ function collectQueueLines(includeNonMotion) {
 
 function refreshSelectedStyles() {
   commandItems.forEach((item, id) => {
-    if (!item) return;
+    if (!item || item.parentNode !== commandList) return;
     const benchmarkSampleIndex = item.dataset.benchmarkSampleIndex != null
       ? Number(item.dataset.benchmarkSampleIndex)
       : null;
@@ -1704,6 +1782,59 @@ speedSelect.addEventListener('change', () => {
 });
 canvas.addEventListener('wheel', applyWheelZoom, { passive: false });
 queueFromPreviewBtn.addEventListener('click', requestQueueFromPreview);
+
+// ==== Virtualized command list: delegated click + scroll ====
+
+commandList.addEventListener('click', (e) => {
+  const item = e.target.closest('.command-item');
+  if (!item || item === virtualSpacer) return;
+  if (item.dataset.benchmarkSampleIndex != null) {
+    const sampleIndex = Number(item.dataset.benchmarkSampleIndex);
+    selectedCommandIds.clear();
+    if (e.shiftKey && lastClickedBenchmarkSampleIndex != null) {
+      const lo = Math.min(lastClickedBenchmarkSampleIndex, sampleIndex);
+      const hi = Math.max(lastClickedBenchmarkSampleIndex, sampleIndex);
+      for (let id = lo; id <= hi; id += 1) selectedBenchmarkSampleIndexes.add(id);
+    } else if (e.ctrlKey || e.metaKey) {
+      if (selectedBenchmarkSampleIndexes.has(sampleIndex)) selectedBenchmarkSampleIndexes.delete(sampleIndex);
+      else selectedBenchmarkSampleIndexes.add(sampleIndex);
+    } else {
+      selectedBenchmarkSampleIndexes.clear();
+      selectedBenchmarkSampleIndexes.add(sampleIndex);
+    }
+    lastClickedBenchmarkSampleIndex = sampleIndex;
+    refreshSelectedStyles();
+    updateAiContextBar();
+    return;
+  }
+  const commandId = Number(item.dataset.commandId);
+  if (!Number.isFinite(commandId)) return;
+  setCommandCursor(commandId);
+  if (e.shiftKey && lastClickedCommandId != null) {
+    const lo = Math.min(lastClickedCommandId, commandId);
+    const hi = Math.max(lastClickedCommandId, commandId);
+    for (let id = lo; id <= hi; id += 1) selectedCommandIds.add(id);
+  } else if (e.ctrlKey || e.metaKey) {
+    if (selectedCommandIds.has(commandId)) selectedCommandIds.delete(commandId);
+    else selectedCommandIds.add(commandId);
+  } else {
+    selectedCommandIds.clear();
+    selectedCommandIds.add(commandId);
+  }
+  lastClickedCommandId = commandId;
+  refreshSelectedStyles();
+  updateAiContextBar();
+});
+
+let _virtualScrollRaf = false;
+commandList.addEventListener('scroll', () => {
+  if (_virtualScrollRaf || virtualMode === null) return;
+  _virtualScrollRaf = true;
+  requestAnimationFrame(() => {
+    _virtualScrollRaf = false;
+    ensureVirtualWindow(null);
+  });
+}, { passive: true });
 
 let _pendingTimelinePayload = null;
 let _timelineRafPending = false;
