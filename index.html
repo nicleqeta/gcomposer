@@ -9345,9 +9345,22 @@ async function saveGcodeInputWithArcs(rawText, sourceName) {
     const extMatch = String(sourceName || '').match(/\.[^.]+$/);
     const ext = extMatch ? extMatch[0] : '.gcode';
     const outName = `${baseName}_ARC${ext}`;
-    downloadGcodeText(result.lines.join('\n'), outName);
+    const outputText = result.lines.join('\n');
+    downloadGcodeText(outputText, outName);
+    // Size stats: line reduction and byte-size percentage vs the normalized input
+    const inputLineCount = lines.length;
+    const outputLineCount = result.lines.length;
+    const lineReductionPct = inputLineCount > 0
+      ? ((1 - outputLineCount / inputLineCount) * 100).toFixed(1)
+      : '0.0';
+    const inputBytes = new Blob([lines.join('\n')]).size;
+    const outputBytes = new Blob([outputText]).size;
+    const sizePct = inputBytes > 0 ? ((outputBytes / inputBytes) * 100).toFixed(1) : '100.0';
     addLine(`Save with Arcs: ${report.arcsCreated} arc(s) replaced ${report.linearMovesMerged} linear move(s), ` +
-            `max deviation ${Number(report.maxDeviationMm).toFixed(4)}mm. Saved as ${outName}`, 'sys');
+            `max deviation ${Number(report.maxDeviationMm).toFixed(4)}mm. ` +
+            `Lines: ${inputLineCount.toLocaleString()} → ${outputLineCount.toLocaleString()} (-${lineReductionPct}%). ` +
+            `Size: ${(outputBytes / 1024).toFixed(1)} KB vs ${(inputBytes / 1024).toFixed(1)} KB (${sizePct}% of original). ` +
+            `Saved as ${outName}`, 'sys');
   } catch (error) {
     addLine('Save with Arcs failed: ' + (error && error.message ? error.message : String(error)), 'err');
   }
