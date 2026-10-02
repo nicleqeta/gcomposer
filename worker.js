@@ -485,8 +485,13 @@ export default {
 
     // ── /gcode — serve index.html with the GCode panel open ──────────
     if (request.method === 'GET' && (url.pathname === '/gcode' || url.pathname === '/gcode/')) {
-      const gcodeReq = new Request(new URL('/?section=gcode', url.origin).href, request);
-      return env.ASSETS.fetch(gcodeReq);
+      // Serve index.html and let the client read ?section=gcode. The assets
+      // binding serves static files only — it cannot serve "/index.html" for a
+      // query-bearing "/" request, so fetch the asset by explicit path and pass
+      // the section hint via a response header the client can also ignore.
+      // Simplest reliable approach: redirect to /?section=gcode (browser then
+      // requests "/" normally and the client opens the section from the param).
+      return Response.redirect(new URL('/?section=gcode', url.origin).href, 302);
     }
 
     if (request.method === 'GET' && url.pathname === '/' && url.searchParams.has('gcom') && env.GCOM_SCRIPTS) {
