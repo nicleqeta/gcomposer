@@ -9382,10 +9382,10 @@ async function saveGcodeInputWithArcs(rawText, sourceName) {
     const outputBytes = new Blob([outputText]).size;
     const sizePct = inputBytes > 0 ? ((outputBytes / inputBytes) * 100).toFixed(1) : '100.0';
     addLine(`Save with Arcs: ${report.arcsCreated} arc(s) replaced ${report.linearMovesMerged} linear move(s), ` +
-            `max deviation ${Number(report.maxDeviationMm).toFixed(4)}mm. ` +
-            `Lines: ${inputLineCount.toLocaleString()} → ${outputLineCount.toLocaleString()} (-${lineReductionPct}%). ` +
-            `Size: ${(outputBytes / 1024).toFixed(1)} KB vs ${(inputBytes / 1024).toFixed(1)} KB (${sizePct}% of original). ` +
-            `Saved as ${outName}`, 'sys');
+            `max deviation ${Number(report.maxDeviationMm).toFixed(4)}mm.`, 'sys');
+    addLine(`Lines: ${inputLineCount.toLocaleString()} → ${outputLineCount.toLocaleString()} (-${lineReductionPct}%). ` +
+            `Size: ${(outputBytes / 1024).toFixed(1)} KB vs ${(inputBytes / 1024).toFixed(1)} KB (${sizePct}% of original).`, 'sys');
+    addLine(`Saved as ${outName}`, 'sys');
     // Envelope safety report: per-axis toolpath bounds, original vs fitted.
     // Always reported (warning or OK) so the user sees the machine's travel
     // extents for every fit. One line per axis for readability.
@@ -9399,9 +9399,10 @@ async function saveGcodeInputWithArcs(rawText, sourceName) {
       addLine(`Envelope check (${withinTolerance ? 'OK' : 'grew beyond tolerance'}):`,
               severity);
       for (const [axis, d] of Object.entries(safety.axes)) {
+        const A = axis.toUpperCase();
         const grow = Math.max(d.growLowMm, d.growHighMm);
         const grew = grow > Number(report.toleranceMm || 0) + 0.001;
-        addLine(`  ${axis.toUpperCase()} Min ${d.fittedMin} ; ${axis.toUpperCase()} Max ${d.fittedMax}` +
+        addLine(`  ${A} : Min ${d.fittedMin} ; Max ${d.fittedMax}` +
                 (grew ? `  (grew ${grow.toFixed(4)} mm beyond original)` : ''),
                 severity);
       }
