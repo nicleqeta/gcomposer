@@ -5283,9 +5283,16 @@ function parseStartupScriptRequest() {
 }
 
 // Open a sidebar section from the URL: ?section=gcode | basic | advanced
-// Backs the /gcode deep link (worker rewrites /gcode → /?section=gcode).
+// Backs the /gcode deep link. Also treats a /gcode pathname as section=gcode —
+// browsers/CDNs may serve a cached SPA response for /gcode without following
+// the worker's redirect, so the client recognizes the path itself.
 function applySectionParam() {
-  const section = (new URLSearchParams(window.location.search).get('section') || '').trim().toLowerCase();
+  const params = new URLSearchParams(window.location.search);
+  let section = (params.get('section') || '').trim().toLowerCase();
+  if (!section) {
+    const path = window.location.pathname.replace(/\/+$/, '').toLowerCase();
+    if (path === '/gcode') section = 'gcode';
+  }
   if (!section) return;
   const targets = { gcode: gcodeSection, basic: basicSection, advanced: advancedSection };
   const target = targets[section];
