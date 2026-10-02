@@ -304,6 +304,7 @@
   body.benchmark-mode #step-forward-btn,
   body.benchmark-mode #end-btn,
   body.benchmark-mode #fit-btn,
+  body.benchmark-mode #shading-btn,
   body.benchmark-mode .queue-panel { display: none; }
 
   body.benchmark-mode .shell { grid-template-columns: minmax(0, 1fr) 320px; }
@@ -326,6 +327,7 @@
     <button class="btn" id="step-forward-btn" type="button">Step Forward</button>
     <button class="btn" id="end-btn" type="button">End</button>
     <button class="btn" id="fit-btn" type="button">Fit</button>
+    <button class="btn" id="shading-btn" type="button" title="Toggle 3D shaded solid-wire reflection">Wire: 3D</button>
     <select class="select" id="view-select" aria-label="Preview mode">
       <option value="perspective">Perspective</option>
       <option value="top">Top (XY)</option>
@@ -400,6 +402,7 @@ const stepBackBtn = document.getElementById('step-back-btn');
 const stepForwardBtn = document.getElementById('step-forward-btn');
 const endBtn = document.getElementById('end-btn');
 const fitBtn = document.getElementById('fit-btn');
+const shadingBtn = document.getElementById('shading-btn');
 const viewSelect = document.getElementById('view-select');
 const speedSelect = document.getElementById('speed-select');
 const queueModeSelect = document.getElementById('queue-mode-select');
@@ -452,7 +455,8 @@ let playback = {
   baseCommandMs: 260,
   lastFrameAt: 0,
   accumulatorMs: 0,
-  zoom: 1
+  zoom: 1,
+  wireShading: true
 };
 
 function resizeCanvas() {
@@ -514,6 +518,8 @@ function syncPlaybackUi() {
   playBtn.textContent = playback.playing ? 'Pause' : 'Play';
   viewSelect.value = playback.viewMode;
   speedSelect.value = String(playback.speed);
+  shadingBtn.textContent = playback.wireShading ? 'Wire: 3D' : 'Wire: Flat';
+  shadingBtn.style.color = playback.wireShading ? 'var(--teal)' : 'var(--muted)';
   const count = timeline ? timeline.commandCount : 0;
   const displayIndex = count ? Math.min(playback.commandCursor + 1, count) : 0;
   commandProgress.textContent = `${displayIndex} / ${count}`;
@@ -849,6 +855,36 @@ function getVisibleSegmentEnd() {
   return -1;
 }
 
+// Wire 3D shading palette: smooth ramp from deep slate-teal to vivid teal (never white).
+const WIRE_BUCKET_COUNT = 64;
+const WIRE_AMBIENT = 0.01;
+const WIRE_DEPTH_FALLOFF = 0.33;
+const WIRE_BUCKET_COLORS = [];
+const WIRE_BUCKET_WIDTHS = [];
+function buildWirePalette() {
+  WIRE_BUCKET_COLORS.length = 0;
+  WIRE_BUCKET_WIDTHS.length = 0;
+  const stops = [
+    [0.0, 5, 30, 29],
+    [0.45, 16, 120, 110],
+    [0.8, 24, 190, 170],
+    [1.0, 64, 232, 210]
+  ];
+  for (let i = 0; i < WIRE_BUCKET_COUNT; i += 1) {
+    const t = i / (WIRE_BUCKET_COUNT - 1);
+    let s = 1;
+    while (s < stops.length - 1 && t > stops[s][0]) s += 1;
+    const a = stops[s - 1];
+    const b = stops[s];
+    const k = (t - a[0]) / (b[0] - a[0]);
+    const r = Math.round(a[1] + ((b[1] - a[1]) * k));
+    const g = Math.round(a[2] + ((b[2] - a[2]) * k));
+    const bl = Math.round(a[3] + ((b[3] - a[3]) * k));
+    WIRE_BUCKET_COLORS.push(`rgba(${r}, ${g}, ${bl}, ${(0.9 + (0.08 * t)).toFixed(3)})`);
+    WIRE_BUCKET_WIDTHS.push(1.6 + (0.8 * t));
+  }
+}
+buildWirePalette();
 function projectTopInto(point, bounds, scale, offsetX, offsetY, out) {
   const cx = bounds.min.x + (bounds.span.x / 2);
   const cy = bounds.min.y + (bounds.span.y / 2);
@@ -1164,17 +1200,61 @@ function render() {
   const from = { x: 0, y: 0 };
   const to = { x: 0, y: 0 };
   const rapidPath = new Path2D();
-  const feedPath = new Path2D();
   const activePath = new Path2D();
   let hasRapid = false;
-  let hasFeed = false;
   let hasActive = false;
+
+  // Headlight wire shading (Rhino "Shade Selected" style): light comes from the eye.
+  // Brightness rises smoothly as a line turns perpendicular to the eye ray and falls
+  // with distance from the eye. Fine-grained buckets keep it tonal while bounding
+  // stroke calls to at most WIRE_BUCKET_COUNT per frame.
+  const feedBuckets = new Array(WIRE_BUCKET_COUNT);
+
+  // Camera view direction in world space (eye -> scene). For perspective this matches
+  // the depth axis (z2) used by projectPerspectiveInto.
+  let camDirX = 0, camDirY = 0, camDirZ = -1;
+  let depthCenter = center;
+  const isPerspective = playback.viewMode !== 'top' && playback.viewMode !== 'front' && playback.viewMode !== 'right';
+  if (playback.viewMode === 'top') {
+    camDirX = 0; camDirY = 0; camDirZ = -1;
+  } else if (playback.viewMode === 'front') {
+    camDirX = 0; camDirY = 1; camDirZ = 0;
+  } else if (playback.viewMode === 'right') {
+    camDirX = -1; camDirY = 0; camDirZ = 0;
+  } else {
+    const sinP = Math.sin(camera.pitch);
+    camDirX = Math.sin(camera.yaw) * sinP;
+    camDirY = Math.cos(camera.yaw) * sinP;
+    camDirZ = -Math.cos(camera.pitch);
+  }
+  if (!isPerspective) {
+    depthCenter = {
+      x: bounds.min.x + (bounds.span.x / 2),
+      y: bounds.min.y + (bounds.span.y / 2),
+      z: bounds.min.z + (bounds.span.z / 2)
+    };
+  }
+  // Eye sits 650 units behind the centre along the view axis (same as the projection).
+  const eyeX = depthCenter.x - (camDirX * 650);
+  const eyeY = depthCenter.y - (camDirY * 650);
+  const eyeZ = depthCenter.z - (camDirZ * 650);
+  // Depth range of the work envelope along the view axis, for distance attenuation.
+  const depthHalf = Math.max(1e-3,
+    Math.abs(camDirX * bounds.span.x * 0.5) +
+    Math.abs(camDirY * bounds.span.y * 0.5) +
+    Math.abs(camDirZ * bounds.span.z * 0.5));
+  const depthInv = 1 / (2 * depthHalf);
+
   const projectInto = (point, out) => {
     if (playback.viewMode === 'top') return projectTopInto(point, bounds, scale, offsetX, offsetY, out);
     if (playback.viewMode === 'front') return projectFrontInto(point, bounds, scale, offsetX, offsetY, out);
     if (playback.viewMode === 'right') return projectRightInto(point, bounds, scale, offsetX, offsetY, out);
     return projectPerspectiveInto(point, center, scale, offsetX, offsetY, out);
   };
+
+  const wireShading = playback.wireShading;
+  const flatPath = wireShading ? null : new Path2D();
+  let hasFeed = false;
 
   for (let index = 0; index <= visibleEnd; index += 1) {
     const segment = timeline.segments[index];
@@ -1189,10 +1269,57 @@ function render() {
       rapidPath.moveTo(from.x, from.y);
       rapidPath.lineTo(to.x, to.y);
       hasRapid = true;
-    } else {
-      feedPath.moveTo(from.x, from.y);
-      feedPath.lineTo(to.x, to.y);
+    } else if (!wireShading) {
+      flatPath.moveTo(from.x, from.y);
+      flatPath.lineTo(to.x, to.y);
       hasFeed = true;
+    } else {
+      const f = segment.from;
+      const t = segment.to;
+      let tx = segment.tx;
+      let ty = segment.ty;
+      let tz = segment.tz;
+      if (tx === undefined) {
+        const dx = (t.x || 0) - (f.x || 0);
+        const dy = (t.y || 0) - (f.y || 0);
+        const dz = (t.z || 0) - (f.z || 0);
+        const len = Math.hypot(dx, dy, dz);
+        if (len > 1e-6) {
+          tx = dx / len; ty = dy / len; tz = dz / len;
+        } else {
+          tx = 1; ty = 0; tz = 0;
+        }
+        segment.tx = tx; segment.ty = ty; segment.tz = tz;
+        segment.isSlope = Math.abs(tz) > 0.005;
+      }
+      const mx = ((f.x || 0) + (t.x || 0)) * 0.5;
+      const my = ((f.y || 0) + (t.y || 0)) * 0.5;
+      const mz = ((f.z || 0) + (t.z || 0)) * 0.5;
+
+      // Eye ray to this segment (per-segment in perspective, parallel in ortho views).
+      let rx = camDirX, ry = camDirY, rz = camDirZ;
+      if (isPerspective) {
+        rx = mx - eyeX; ry = my - eyeY; rz = mz - eyeZ;
+        const rl = Math.sqrt((rx * rx) + (ry * ry) + (rz * rz));
+        if (rl > 1e-6) { rx /= rl; ry /= rl; rz /= rl; }
+      }
+      const dotV = (tx * rx) + (ty * ry) + (tz * rz);
+      const sinTheta = Math.sqrt(Math.max(0, 1 - (dotV * dotV)));
+
+      // 0 = nearest point of the envelope, 1 = farthest.
+      const depth = ((mx - depthCenter.x) * camDirX) + ((my - depthCenter.y) * camDirY) + ((mz - depthCenter.z) * camDirZ);
+      const depthNorm = Math.min(1, Math.max(0, (depth + depthHalf) * depthInv));
+
+      const facing = sinTheta * sinTheta * (3 - (2 * sinTheta)); // smoothstep: soft roll-off near end-on
+      const intensity = WIRE_AMBIENT + ((1 - WIRE_AMBIENT) * facing * (1 - (WIRE_DEPTH_FALLOFF * depthNorm)));
+      const bIndex = Math.min(WIRE_BUCKET_COUNT - 1, Math.max(0, Math.round(intensity * (WIRE_BUCKET_COUNT - 1))));
+      let bucket = feedBuckets[bIndex];
+      if (!bucket) {
+        bucket = new Path2D();
+        feedBuckets[bIndex] = bucket;
+      }
+      bucket.moveTo(from.x, from.y);
+      bucket.lineTo(to.x, to.y);
     }
   }
 
@@ -1201,10 +1328,22 @@ function render() {
     ctx.lineWidth = 1.5;
     ctx.stroke(rapidPath);
   }
-  if (hasFeed) {
-    ctx.strokeStyle = 'rgba(20, 184, 166, 0.88)';
-    ctx.lineWidth = 2.2;
-    ctx.stroke(feedPath);
+
+  if (!wireShading) {
+    if (hasFeed) {
+      ctx.strokeStyle = 'rgba(20, 184, 166, 0.88)';
+      ctx.lineWidth = 2.2;
+      ctx.stroke(flatPath);
+    }
+  } else {
+    // Dark-to-bright so brighter (nearer, face-on) lines draw on top.
+    for (let b = 0; b < WIRE_BUCKET_COUNT; b += 1) {
+      if (feedBuckets[b]) {
+        ctx.strokeStyle = WIRE_BUCKET_COLORS[b];
+        ctx.lineWidth = WIRE_BUCKET_WIDTHS[b];
+        ctx.stroke(feedBuckets[b]);
+      }
+    }
   }
   if (hasActive) {
     ctx.strokeStyle = '#f59e0b';
@@ -1522,6 +1661,30 @@ function createWaitingBenchmarkTimeline(title, previousTimeline = null) {
 function loadTimeline(nextTimeline) {
   const previousTimeline = timeline;
   const previousViewMode = playback.viewMode;
+
+  // Precompute unit tangents and slope detection for all motion segments (one-time fast cache)
+  if (Array.isArray(nextTimeline?.segments)) {
+    for (let i = 0; i < nextTimeline.segments.length; i += 1) {
+      const seg = nextTimeline.segments[i];
+      if (seg.tx === undefined) {
+        const dx = (seg.to.x || 0) - (seg.from.x || 0);
+        const dy = (seg.to.y || 0) - (seg.from.y || 0);
+        const dz = (seg.to.z || 0) - (seg.from.z || 0);
+        const len = Math.hypot(dx, dy, dz);
+        if (len > 1e-6) {
+          seg.tx = dx / len;
+          seg.ty = dy / len;
+          seg.tz = dz / len;
+          seg.isSlope = Math.abs(seg.tz) > 0.005;
+        } else {
+          seg.tx = 1;
+          seg.ty = 0;
+          seg.tz = 0;
+          seg.isSlope = false;
+        }
+      }
+    }
+  }
 
   // If an update arrives without benchmark payload, retain the existing benchmark
   // data so the chart doesn't disappear at script completion due unrelated refreshes.
@@ -1946,6 +2109,11 @@ stepForwardBtn.addEventListener('click', () => {
 });
 endBtn.addEventListener('click', jumpToEnd);
 fitBtn.addEventListener('click', fitPreview);
+shadingBtn.addEventListener('click', () => {
+  playback.wireShading = !playback.wireShading;
+  syncPlaybackUi();
+  render();
+});
 tapeCopyBtn.addEventListener('click', copyBenchmarkDataToClipboard);
 viewSelect.addEventListener('change', () => {
   playback.viewMode = viewSelect.value;
