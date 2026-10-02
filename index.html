@@ -9351,6 +9351,14 @@ async function saveGcodeInputWithArcs(rawText, sourceName) {
     const result = await requestFitArcs(lines, GCODE_FIT_ARC_TOLERANCE_MM, GCODE_FIT_ARC_MIN_POINTS);
     const report = result.report || {};
     if (report.error) { addLine('Save with Arcs failed: ' + report.error, 'err'); return; }
+    // Safety check: envelope comparison. The fitted file is always used as long
+    // as at least one arc was created; envelope growth beyond tolerance is
+    // reported as a warning (arc bulge beyond the original polygon envelope).
+    const safety = report.safety || {};
+    if (safety.available && !safety.ok) {
+      addLine('Save with Arcs WARNING: fitted toolpath extends beyond the original envelope ' +
+              'beyond tolerance (arc bulge). Review the envelope check below before running.', 'warn');
+    }
     if (!report.arcsCreated) {
       addLine('Save with Arcs: no arc chains found within tolerance — file not written', 'warn');
       return;
@@ -9378,6 +9386,21 @@ async function saveGcodeInputWithArcs(rawText, sourceName) {
             `Lines: ${inputLineCount.toLocaleString()} → ${outputLineCount.toLocaleString()} (-${lineReductionPct}%). ` +
             `Size: ${(outputBytes / 1024).toFixed(1)} KB vs ${(inputBytes / 1024).toFixed(1)} KB (${sizePct}% of original). ` +
             `Saved as ${outName}`, 'sys');
+    // Envelope safety report: per-axis toolpath bounds, original vs fitted.
+    // Always reported (warning or OK) so the user sees the machine's travel
+    // extents for every fit.
+    if (safety.available && safety.axes) {
+      const parts = [];
+      let worstGrow = 0;
+      for (const [axis, d] of Object.entries(safety.axes)) {
+        const grow = Math.max(d.growLowMm, d.growHighMm);
+        worstGrow = Math.max(worstGrow, grow);
+        parts.push(`${axis.toUpperCase()} ${d.originalMin}..${d.originalMax} → ${d.fittedMin}..${d.fittedMax} mm`);
+      }
+      const withinTolerance = worstGrow <= Number(report.toleranceMm || 0) + 0.001;
+      addLine(`Envelope check (${withinTolerance ? 'OK' : 'grew beyond tolerance'}): ${parts.join(' | ')}`,
+              withinTolerance ? 'sys' : 'warn');
+    }
   } catch (error) {
     addLine('Save with Arcs failed: ' + (error && error.message ? error.message : String(error)), 'err');
   }

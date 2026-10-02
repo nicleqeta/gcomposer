@@ -149,8 +149,10 @@ function maxRadialDeviation(points, cx, cy, r) {
 // Max deviation of the sampled ARC from the original POLYLINE it replaces.
 // Vertex-to-circle checks alone are insufficient: an arc can pass through every
 // vertex yet bulge far from the chords between them (sagitta effect on long
-// segments / large radii). This samples the arc and measures distance to the
-// polyline segments, which is what the machine will actually deviate from.
+// segments / large radii). This samples the arc and measures each sample's
+// distance to its NEAREST polyline segment, then takes the max over samples
+// (one-sided Hausdorff distance arc→polyline). Taking the max over ALL
+// (sample, segment) pairs would instead return the shape's diameter — wrong.
 function maxArcToPolylineDeviation(startPt, endPt, circle, clockwise, polyPts) {
   const { cx, cy, r } = circle;
   const a0 = Math.atan2(startPt.y - cy, startPt.x - cx);
@@ -162,7 +164,8 @@ function maxArcToPolylineDeviation(startPt, endPt, circle, clockwise, polyPts) {
   for (let s = 1; s < steps; s += 1) {
     const a = a0 + sweep * (s / steps);
     const p = { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
-    // Distance from p to each polyline segment
+    // Nearest polyline segment distance for this arc sample
+    let minD = Infinity;
     for (let i = 0; i < polyPts.length - 1; i += 1) {
       const a2 = polyPts[i], b2 = polyPts[i + 1];
       const abx = b2.x - a2.x, aby = b2.y - a2.y;
@@ -171,8 +174,9 @@ function maxArcToPolylineDeviation(startPt, endPt, circle, clockwise, polyPts) {
         ? Math.max(0, Math.min(1, ((p.x - a2.x) * abx + (p.y - a2.y) * aby) / len2))
         : 0;
       const d = Math.hypot(p.x - (a2.x + t * abx), p.y - (a2.y + t * aby));
-      if (d > maxDev) maxDev = d;
+      if (d < minD) minD = d;
     }
+    if (minD > maxDev) maxDev = minD;
   }
   return maxDev;
 }
@@ -198,6 +202,11 @@ function sweepDirection(points, cx, cy) {
 // Incremental window fitting: grow a window of consecutive G1 points while they lie
 // on a common circle within tolerance; emit an arc when the window can't grow further.
 // This handles mixed paths (arc followed by straight section) correctly.
+
+// Maximum allowed deviation of a fitted ARC from the original POLYLINE path it
+// replaces (arc-to-chord sagitta). Separate from the fit tolerance: this is the
+// "how far can the rehydrated arc drift from the programmed path" limit.
+const MAX_PATH_DEVIATION_MM = 0.05;
 
 function fitArcsInLines(lines, toleranceMm, minPoints) {
   const state = createMotionState();
@@ -259,7 +268,175 @@ function fitArcsInLines(lines, toleranceMm, minPoints) {
   flushChain();
 
   report.outputLines = out.length;
+
+  // ---- Safety verification: compare toolpath envelopes ----
+  // Replay both the original and fitted programs through a shared simulator and
+  // compare the per-axis bounding boxes of the toolpath. Growth beyond the fit
+  // tolerance is reported as a WARNING (the fitted arc bulges outside the
+  // original polygon envelope — inherent to polygon→arc conversion), but the
+  // fitted file is still returned as long as at least one arc was created.
+  // Unfittable segments keep their original G1 lines, seamlessly connected.
+  const safety = verifyToolpathEnvelope(lines, out, toleranceMm);
+  report.safety = safety.summary;
+  report.safety.rejected = false;
   return { lines: out, report };
+}
+
+// ---- Toolpath envelope simulator ----
+// Replays G-code (G0/G1/G2/G3, G20/G21 units, G90/G91 distance mode, IJK arcs)
+// and returns the per-axis min/max of every point the tool passes through,
+// including sampled arc interior points (not just endpoints).
+
+function simulateToolpathEnvelope(lines) {
+  const state = createMotionState();
+  const min = { x: Infinity, y: Infinity, z: Infinity };
+  const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+  let sawMotion = false;
+
+  const include = (p) => {
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) return;
+    sawMotion = true;
+    if (p.x < min.x) min.x = p.x;
+    if (p.y < min.y) min.y = p.y;
+    if (p.z < min.z) min.z = p.z;
+    if (p.x > max.x) max.x = p.x;
+    if (p.y > max.y) max.y = p.y;
+    if (p.z > max.z) max.z = p.z;
+  };
+
+  include(state.position);
+
+  for (const raw of lines) {
+    const { words } = parseWords(raw);
+    if (!words.length) continue;
+
+    const gCodes = [];
+    const axis = {};
+    const arc = {};
+    for (const w of words) {
+      if (w.letter === 'G') gCodes.push(w.value);
+      else if (w.letter === 'X' || w.letter === 'Y' || w.letter === 'Z') axis[w.letter] = w.value;
+      else if (w.letter === 'I' || w.letter === 'J' || w.letter === 'K' || w.letter === 'R') arc[w.letter] = w.value;
+    }
+
+    for (const code of gCodes) {
+      if (code === 20) state.units = 'inch';
+      else if (code === 21) state.units = 'mm';
+      else if (code === 90) state.distanceMode = 'absolute';
+      else if (code === 91) state.distanceMode = 'incremental';
+    }
+
+    const motion = gCodes.find(c => c === 0 || c === 1 || c === 2 || c === 3);
+    const hasAxis = Object.keys(axis).length > 0;
+    if (motion == null && !hasAxis) continue;
+    const mode = motion != null ? `G${motion}` : state.motionMode;
+    if (mode !== 'G0' && mode !== 'G1' && mode !== 'G2' && mode !== 'G3') continue;
+
+    const scale = unitScale(state.units);
+    const target = { ...state.position };
+    for (const a of ['X', 'Y', 'Z']) {
+      if (axis[a] == null) continue;
+      const v = axis[a] * scale;
+      const key = a.toLowerCase();
+      target[key] = state.distanceMode === 'incremental' ? target[key] + v : v;
+    }
+
+    if (mode === 'G0' || mode === 'G1') {
+      include(target);
+      state.position = target;
+      continue;
+    }
+
+    // G2/G3: sample the arc so interior bulge points are included
+    const clockwise = mode === 'G2';
+    let cx, cy;
+    if (arc.R != null) {
+      // Radius form: solve center (same logic as preview)
+      const dx = target.x - state.position.x;
+      const dy = target.y - state.position.y;
+      const chord = Math.hypot(dx, dy);
+      const r = Math.abs(arc.R * scale);
+      if (chord === 0 || chord > r * 2) { include(target); state.position = target; continue; }
+      const mx = (state.position.x + target.x) / 2;
+      const my = (state.position.y + target.y) / 2;
+      const h = Math.sqrt(Math.max(0, r * r - (chord / 2) * (chord / 2)));
+      const nx = -dy / chord, ny = dx / chord;
+      const c1 = { x: mx + nx * h, y: my + ny * h };
+      const c2 = { x: mx - nx * h, y: my - ny * h };
+      const a0 = Math.atan2(state.position.y - c1.y, state.position.x - c1.x);
+      const a1 = Math.atan2(target.y - c1.y, target.x - c1.x);
+      let s = a1 - a0;
+      if (clockwise) { while (s >= 0) s -= Math.PI * 2; } else { while (s <= 0) s += Math.PI * 2; }
+      cx = (Math.abs(s) > Math.PI) === (arc.R * scale < 0) ? c2.x : c1.x;
+      cy = (Math.abs(s) > Math.PI) === (arc.R * scale < 0) ? c2.y : c1.y;
+    } else {
+      cx = state.position.x + (arc.I || 0) * scale;
+      cy = state.position.y + (arc.J || 0) * scale;
+    }
+
+    const r = Math.hypot(state.position.x - cx, state.position.y - cy);
+    if (!(r > 0)) { include(target); state.position = target; continue; }
+    const a0 = Math.atan2(state.position.y - cy, state.position.x - cx);
+    const a1 = Math.atan2(target.y - cy, target.x - cx);
+    let sweep = a1 - a0;
+    if (clockwise) { while (sweep >= 0) sweep -= Math.PI * 2; } else { while (sweep <= 0) sweep += Math.PI * 2; }
+    const steps = Math.max(8, Math.ceil(Math.abs(sweep) / 0.05));
+    for (let s = 1; s <= steps; s += 1) {
+      const a = a0 + sweep * (s / steps);
+      include({
+        x: cx + r * Math.cos(a),
+        y: cy + r * Math.sin(a),
+        z: state.position.z + (target.z - state.position.z) * (s / steps)
+      });
+    }
+    state.position = target;
+  }
+
+  if (!sawMotion) return null;
+  return { min, max };
+}
+
+// Compare original vs fitted envelopes; ok=false if the fitted path extends
+// beyond the original by more than tolerance + safety margin on any axis.
+function verifyToolpathEnvelope(originalLines, fittedLines, toleranceMm) {
+  const orig = simulateToolpathEnvelope(originalLines);
+  const fit = simulateToolpathEnvelope(fittedLines);
+  if (!orig || !fit) {
+    return { ok: true, summary: { available: false, reason: 'no motion to compare' } };
+  }
+  // Safety margin: fit tolerance plus a small allowance for numeric rounding
+  // in emitted coordinates (4 decimals) and arc sampling.
+  const margin = toleranceMm + 0.05;
+  const axes = ['x', 'y', 'z'];
+  const deltas = {};
+  let ok = true;
+  const violations = [];
+  for (const axis of axes) {
+    const growLow = orig.min[axis] - fit.min[axis];   // positive = fitted extends lower
+    const growHigh = fit.max[axis] - orig.max[axis];  // positive = fitted extends higher
+    deltas[axis] = {
+      originalMin: +orig.min[axis].toFixed(4),
+      originalMax: +orig.max[axis].toFixed(4),
+      fittedMin: +fit.min[axis].toFixed(4),
+      fittedMax: +fit.max[axis].toFixed(4),
+      growLowMm: +growLow.toFixed(4),
+      growHighMm: +growHigh.toFixed(4)
+    };
+    if (growLow > margin || growHigh > margin) {
+      ok = false;
+      violations.push(axis.toUpperCase());
+    }
+  }
+  return {
+    ok,
+    summary: {
+      available: true,
+      ok,
+      marginMm: +margin.toFixed(4),
+      axes: deltas,
+      violations
+    }
+  };
 }
 
 // Fit a chain incrementally: grow the window while points stay on a circle within
@@ -292,15 +469,22 @@ function emitFittedChain(chain, chainStart, out, report, toleranceMm, minPoints,
       const pts = buildPoints(lo, hi);
       if (pts.length < 3) { hi += 1; continue; }
       const circle = fitCircle(pts);
+      // Fidelity criterion (two-part):
+      // 1. Every original vertex lies within tolerance of the fitted circle.
+      // 2. The sampled ARC stays within tolerance of the POLYLINE it replaces
+      //    (arc-to-chord distance, sagitta). This is what stops coarse polygons
+      //    from being fitted: a hexagon on a 50mm circle has ~3.6mm sagitta on its
+      //    chords, so converting it to an arc would move the tool up to 3.6mm
+      //    away from the programmed path. Dense vertex files (small chords) have
+      //    sagitta well under the limit and still fit normally.
+      //    NOTE: maxArcToPolylineDeviation takes a BOOLEAN clockwise flag — pass
+      //    dir === 'G2', never the dir string itself (truthy string bug).
+      const dir = pts.length >= 3 ? sweepDirection(pts, circle.cx, circle.cy) : 'G3';
       const valid = Boolean(circle)
         && circle.r >= toleranceMm * 2
         && circle.r <= 1e7
-        && maxRadialDeviation(pts, circle.cx, circle.cy, circle.r) <= toleranceMm;
-      // Fidelity criterion: every original vertex must lie within tolerance of the
-      // fitted circle. The arc will bulge from the chords between vertices
-      // (sagitta ≈ c²/8r) — that is inherent to converting a polygon approximation
-      // into a true arc, and the arc is typically CLOSER to the intended shape
-      // than the polygon was. No polyline-deviation rejection here.
+        && maxRadialDeviation(pts, circle.cx, circle.cy, circle.r) <= toleranceMm
+        && maxArcToPolylineDeviation(pts[0], pts[pts.length - 1], circle, dir === 'G2', pts) <= MAX_PATH_DEVIATION_MM;
       if (valid) {
         best = hi;
         bestFit = circle;
