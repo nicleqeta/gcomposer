@@ -214,10 +214,11 @@ function fitArcsInLines(lines, toleranceMm, minPoints) {
   // Chain of consecutive G1 feed-move points (XY plane; Z change breaks chain)
   let chain = [];        // { x, y, z, raw, hasFeed }
   let chainStart = null; // position before first chain move
+  let chainUnitScale = 1; // mm-per-file-unit at chain start (25.4 for inch files)
 
   const flushChain = () => {
     if (chain.length) {
-      emitFittedChain(chain, chainStart, out, report, toleranceMm, minPoints);
+      emitFittedChain(chain, chainStart, out, report, toleranceMm, minPoints, chainUnitScale);
       chain = [];
       chainStart = null;
     }
@@ -237,7 +238,12 @@ function fitArcsInLines(lines, toleranceMm, minPoints) {
                       && Math.abs(cls.target.y - prev.y) < 1e-9
                       && Math.abs(cls.target.z - prev.z) < 1e-9;
       if (!isZeroMove) {
-        if (chain.length === 0) chainStart = { ...state.position };
+        if (chain.length === 0) {
+          chainStart = { ...state.position };
+          // Remember the unit scale in effect when the chain started so emitted
+          // arc coordinates can be converted back to the file's units (G20/G21).
+          chainUnitScale = unitScale(state.units);
+        }
         chain.push({ x: cls.target.x, y: cls.target.y, z: cls.target.z, raw: cls.raw, hasFeed: cls.hasFeed });
         // Z change breaks the XY arc chain
         if (Math.abs(cls.target.z - prev.z) > 1e-9) flushChain();
@@ -258,7 +264,8 @@ function fitArcsInLines(lines, toleranceMm, minPoints) {
 
 // Fit a chain incrementally: grow the window while points stay on a circle within
 // tolerance; emit the longest valid arc, then continue with the remainder.
-function emitFittedChain(chain, chainStart, out, report, toleranceMm, minPoints) {
+function emitFittedChain(chain, chainStart, out, report, toleranceMm, minPoints, unitScaleMmPerFileUnit) {
+  const scale = unitScaleMmPerFileUnit || 1; // mm per file unit (25.4 for inch files)
   let idx = 0; // index into chain where the current window starts
   const startPt = { x: chainStart.x, y: chainStart.y };
   // Machine position after the last emitted move. Arcs are incremental-IJ, so each
@@ -310,7 +317,7 @@ function emitFittedChain(chain, chainStart, out, report, toleranceMm, minPoints)
       // Emit arc covering machinePos -> chain[best]
       const arcStart = { x: machinePos.x, y: machinePos.y };
       const arcEnd = { x: chain[best].x, y: chain[best].y };
-      const emitted = emitArcLine(arcStart, arcEnd, bestFit, chain, lo, best, out, report, bestDev);
+      const emitted = emitArcLine(arcStart, arcEnd, bestFit, chain, lo, best, out, report, bestDev, scale);
       if (emitted) {
         machinePos = arcEnd;
         idx = best + 1;
@@ -324,8 +331,9 @@ function emitFittedChain(chain, chainStart, out, report, toleranceMm, minPoints)
   }
 }
 
-function emitArcLine(startPt, endPt, circle, chain, lo, hi, out, report, maxDev) {
+function emitArcLine(startPt, endPt, circle, chain, lo, hi, out, report, maxDev, unitScaleMmPerFileUnit) {
   const { cx, cy, r } = circle;
+  const scale = unitScaleMmPerFileUnit || 1; // mm per file unit
 
   // Full-circle guard: start == end means a 360° arc — GRBL needs explicit handling;
   // skip fitting these (rare from linear chains, and risky).
@@ -353,9 +361,11 @@ function emitArcLine(startPt, endPt, circle, chain, lo, hi, out, report, maxDev)
   // Z helix: only emit if constant-Z window (helical fitting out of scope)
   const zValues = new Set(chain.slice(lo, hi + 1).map(p => +p.z.toFixed(6)));
   if (zValues.size > 1) return false;
-  const zPart = Math.abs(startPt.z - chain[lo].z) > 1e-9 ? ` Z${formatNum(chain[lo].z)}` : '';
+  const zPart = Math.abs(startPt.z - chain[lo].z) > 1e-9 ? ` Z${formatNum(chain[lo].z / scale)}` : '';
 
-  out.push(`${dir} X${formatNum(endPt.x)} Y${formatNum(endPt.y)}${zPart} I${formatNum(i)} J${formatNum(j)}${feedPart}`);
+  // All positions are tracked internally in mm; convert back to the file's active
+  // units (G20 inch / G21 mm) so the emitted arc is correct in context.
+  out.push(`${dir} X${formatNum(endPt.x / scale)} Y${formatNum(endPt.y / scale)}${zPart} I${formatNum(i / scale)} J${formatNum(j / scale)}${feedPart}`);
   report.arcsCreated += 1;
   report.linearMovesMerged += (hi - lo + 1);
   // maxDev is the enforced vertex-to-circle deviation (fidelity criterion).
