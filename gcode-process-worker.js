@@ -491,6 +491,8 @@ function emitFittedChain(chain, chainStart, out, report, toleranceMm, minPoints,
       const pts = buildPoints(lo, hi);
       if (pts.length < 3) { hi += 1; continue; }
       const circle = fitCircle(pts);
+      // Collinear / degenerate points (e.g. straight X-only raster moves) have no circle.
+      if (!circle) break;
       // Fidelity criterion (two-part):
       // 1. Every original vertex lies within tolerance of the fitted circle.
       // 2. The sampled ARC stays within tolerance of the POLYLINE it replaces
@@ -501,9 +503,8 @@ function emitFittedChain(chain, chainStart, out, report, toleranceMm, minPoints,
       //    sagitta well under the limit and still fit normally.
       //    NOTE: maxArcToPolylineDeviation takes a BOOLEAN clockwise flag — pass
       //    dir === 'G2', never the dir string itself (truthy string bug).
-      const dir = pts.length >= 3 ? sweepDirection(pts, circle.cx, circle.cy) : 'G3';
-      const valid = Boolean(circle)
-        && circle.r >= toleranceMm * 2
+      const dir = sweepDirection(pts, circle.cx, circle.cy);
+      const valid = circle.r >= toleranceMm * 2
         && circle.r <= 1e7
         && maxRadialDeviation(pts, circle.cx, circle.cy, circle.r) <= toleranceMm
         && maxArcToPolylineDeviation(pts[0], pts[pts.length - 1], circle, dir === 'G2', pts) <= MAX_PATH_DEVIATION_MM;
