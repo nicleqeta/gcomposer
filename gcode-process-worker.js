@@ -304,7 +304,12 @@ function simulateToolpathEnvelope(lines) {
     if (p.z > max.z) max.z = p.z;
   };
 
-  include(state.position);
+  // NOTE: the pre-motion start position (0,0,0) is deliberately NOT included.
+  // Job bounds must reflect programmed coordinates only — the machine's actual
+  // start position is unknown at analysis time, and counting the assumed origin
+  // corrupted bounds for jobs that never travel near it (e.g. a job entirely at
+  // negative X reported X max 0 and Y min 0).
+  // The first motion's target IS included, so any job with motion gets bounds.
 
   for (const raw of lines) {
     const { words } = parseWords(raw);
@@ -342,6 +347,10 @@ function simulateToolpathEnvelope(lines) {
     }
 
     if (mode === 'G0' || mode === 'G1') {
+      // Include the full endpoint. The tool physically passes through the
+      // modal position even for axis-omitting moves (G0 Z20 from X0 Y0 does
+      // traverse X0 Y0) — this matches CAM analysis tools and keeps original
+      // vs fitted replays consistent (arcs always interpolate all axes).
       include(target);
       state.position = target;
       continue;

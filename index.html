@@ -9388,18 +9388,23 @@ async function saveGcodeInputWithArcs(rawText, sourceName) {
             `Saved as ${outName}`, 'sys');
     // Envelope safety report: per-axis toolpath bounds, original vs fitted.
     // Always reported (warning or OK) so the user sees the machine's travel
-    // extents for every fit.
+    // extents for every fit. One line per axis for readability.
     if (safety.available && safety.axes) {
-      const parts = [];
       let worstGrow = 0;
-      for (const [axis, d] of Object.entries(safety.axes)) {
-        const grow = Math.max(d.growLowMm, d.growHighMm);
-        worstGrow = Math.max(worstGrow, grow);
-        parts.push(`${axis.toUpperCase()} ${d.originalMin}..${d.originalMax} → ${d.fittedMin}..${d.fittedMax} mm`);
+      for (const d of Object.values(safety.axes)) {
+        worstGrow = Math.max(worstGrow, Math.max(d.growLowMm, d.growHighMm));
       }
       const withinTolerance = worstGrow <= Number(report.toleranceMm || 0) + 0.001;
-      addLine(`Envelope check (${withinTolerance ? 'OK' : 'grew beyond tolerance'}): ${parts.join(' | ')}`,
-              withinTolerance ? 'sys' : 'warn');
+      const severity = withinTolerance ? 'sys' : 'warn';
+      addLine(`Envelope check (${withinTolerance ? 'OK' : 'grew beyond tolerance'}):`,
+              severity);
+      for (const [axis, d] of Object.entries(safety.axes)) {
+        const grow = Math.max(d.growLowMm, d.growHighMm);
+        const grew = grow > Number(report.toleranceMm || 0) + 0.001;
+        addLine(`  ${axis.toUpperCase()} Min ${d.fittedMin} ; ${axis.toUpperCase()} Max ${d.fittedMax}` +
+                (grew ? `  (grew ${grow.toFixed(4)} mm beyond original)` : ''),
+                severity);
+      }
     }
   } catch (error) {
     addLine('Save with Arcs failed: ' + (error && error.message ? error.message : String(error)), 'err');
