@@ -389,6 +389,19 @@ function simulateToolpathEnvelope(lines) {
         z: state.position.z + (target.z - state.position.z) * (s / steps)
       });
     }
+    // Include the arc's EXACT extreme points (cardinal angles 0/90/180/270°)
+    // when they fall within the sweep. Fixed-step sampling rarely lands on
+    // them, which would understate the true bounds (e.g. -19.9973 instead
+    // of -20 for a circle whose leftmost point is at exactly 180°).
+    const zAt = (a) => state.position.z + (target.z - state.position.z) * (((a - a0) / sweep) || 0);
+    for (const card of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+      // Normalize (card - a0) into the swept direction
+      let d = card - a0;
+      if (clockwise) { while (d >= 0) d -= Math.PI * 2; } else { while (d <= 0) d += Math.PI * 2; }
+      if (Math.abs(d) <= Math.abs(sweep) + 1e-9) {
+        include({ x: cx + r * Math.cos(card), y: cy + r * Math.sin(card), z: zAt(d) });
+      }
+    }
     state.position = target;
   }
 
