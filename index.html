@@ -9289,7 +9289,7 @@ async function fitArcsForJob(jobId) {
       return;
     }
     if (!report.arcsCreated) {
-      addLine('Arc fitting: no arc chains found within tolerance — job unchanged', 'warn');
+      addLine('Arc fitting: no arc chains in XY plane found within tolerance (' + GCODE_FIT_ARC_TOLERANCE_MM + 'mm) — job unchanged', 'warn');
       return;
     }
     // Add fitted output as a NEW job; original is never modified
@@ -9360,7 +9360,7 @@ async function saveGcodeInputWithArcs(rawText, sourceName) {
               'beyond tolerance (arc bulge). Review the envelope check below before running.', 'warn');
     }
     if (!report.arcsCreated) {
-      addLine('Save with Arcs: no arc chains found within tolerance — file not written', 'warn');
+      addLine('Save with Arcs: no arc chains in XY plane found within tolerance (' + GCODE_FIT_ARC_TOLERANCE_MM + 'mm) — file not written', 'warn');
       return;
     }
     // Build output name: same extension, _ARC suffix before it
