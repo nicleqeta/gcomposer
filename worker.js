@@ -483,6 +483,12 @@ export default {
       return env.ASSETS.fetch(profilerReq);
     }
 
+    // ── /gcode — serve index.html with the GCode panel open ──────────
+    if (request.method === 'GET' && (url.pathname === '/gcode' || url.pathname === '/gcode/')) {
+      const gcodeReq = new Request(new URL('/?section=gcode', url.origin).href, request);
+      return env.ASSETS.fetch(gcodeReq);
+    }
+
     if (request.method === 'GET' && url.pathname === '/' && url.searchParams.has('gcom') && env.GCOM_SCRIPTS) {
       const scriptId = (url.searchParams.get('gcom') || '').trim();
       if (scriptId) {

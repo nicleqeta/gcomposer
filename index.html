@@ -5282,6 +5282,16 @@ function parseStartupScriptRequest() {
   return { id: scriptId, overrides };
 }
 
+// Open a sidebar section from the URL: ?section=gcode | basic | advanced
+// Backs the /gcode deep link (worker rewrites /gcode → /?section=gcode).
+function applySectionParam() {
+  const section = (new URLSearchParams(window.location.search).get('section') || '').trim().toLowerCase();
+  if (!section) return;
+  const targets = { gcode: gcodeSection, basic: basicSection, advanced: advancedSection };
+  const target = targets[section];
+  if (target) setSidebarSectionOpen(target, true);
+}
+
 function normalizeSavedScriptPayload(payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new Error('Saved script payload is invalid');
@@ -10572,6 +10582,9 @@ function updatePresetBox() {
 function applyPresetToUi() {
   startupScriptRequest = parseStartupScriptRequest();
   diagnosticsPreset = parseDiagnosticsPreset();
+  // Open the requested sidebar section before URL normalization strips the
+  // query string (updateUrlFromAdvancedDiagnostics rewrites the URL).
+  applySectionParam();
   if (!diagnosticsPreset) {
     updateBannerWaitUi(); updatePresetBox(); updateAdvancedDiagnosticsDirtyState(); updateUrlFromAdvancedDiagnostics();
     return;
