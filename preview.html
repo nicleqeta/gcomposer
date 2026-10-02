@@ -98,7 +98,12 @@
     width: 100%;
     height: 100%;
     display: block;
+    cursor: default;
+    user-select: none;
+    -webkit-user-select: none;
   }
+  canvas.orbiting { cursor: grab; }
+  canvas.panning { cursor: move; }
 
   .status-box {
     display: none;
@@ -323,7 +328,9 @@
     <button class="btn" id="fit-btn" type="button">Fit</button>
     <select class="select" id="view-select" aria-label="Preview mode">
       <option value="perspective">Perspective</option>
-      <option value="top">Top</option>
+      <option value="top">Top (XY)</option>
+      <option value="front">Front (ZX)</option>
+      <option value="right">Right (ZY)</option>
       <option value="benchmark">Benchmark</option>
     </select>
     <div class="stats" id="stats"></div>
@@ -423,6 +430,20 @@ let lastBenchmarkInfoText = '';
 const staticLayerCanvas = document.createElement('canvas');
 const staticLayerCtx = staticLayerCanvas.getContext('2d');
 let staticLayerKey = '';
+let camera = {
+  yaw: -Math.PI / 4,
+  pitch: Math.PI / 3.4,
+  panX: 0,
+  panY: 0
+};
+
+const DEFAULT_CAMERA = {
+  yaw: -Math.PI / 4,
+  pitch: Math.PI / 3.4,
+  panX: 0,
+  panY: 0
+};
+
 let playback = {
   playing: false,
   commandCursor: 0,
@@ -462,6 +483,13 @@ function setBenchmarkInfoText(nextText) {
   lastBenchmarkInfoText = text;
 }
 
+function resetCamera() {
+  camera.yaw = DEFAULT_CAMERA.yaw;
+  camera.pitch = DEFAULT_CAMERA.pitch;
+  camera.panX = 0;
+  camera.panY = 0;
+}
+
 function resetPlayback({ atEnd = true } = {}) {
   playback.playing = false;
   if (timeline && timeline.commandCount) {
@@ -472,6 +500,7 @@ function resetPlayback({ atEnd = true } = {}) {
   playback.accumulatorMs = 0;
   playback.lastFrameAt = 0;
   playback.zoom = 1;
+  resetCamera();
   syncPlaybackUi();
 }
 
@@ -510,6 +539,7 @@ function stepCommands(delta) {
 
 function fitPreview() {
   playback.zoom = 1;
+  resetCamera();
   render();
 }
 
@@ -820,8 +850,26 @@ function getVisibleSegmentEnd() {
 }
 
 function projectTopInto(point, bounds, scale, offsetX, offsetY, out) {
-  out.x = offsetX + ((point.x - bounds.min.x) * scale);
-  out.y = offsetY - ((point.y - bounds.min.y) * scale);
+  const cx = bounds.min.x + (bounds.span.x / 2);
+  const cy = bounds.min.y + (bounds.span.y / 2);
+  out.x = offsetX + ((point.x - cx) * scale);
+  out.y = offsetY - ((point.y - cy) * scale);
+  return out;
+}
+
+function projectFrontInto(point, bounds, scale, offsetX, offsetY, out) {
+  const cx = bounds.min.x + (bounds.span.x / 2);
+  const cz = bounds.min.z + (bounds.span.z / 2);
+  out.x = offsetX + ((point.x - cx) * scale);
+  out.y = offsetY - ((point.z - cz) * scale);
+  return out;
+}
+
+function projectRightInto(point, bounds, scale, offsetX, offsetY, out) {
+  const cy = bounds.min.y + (bounds.span.y / 2);
+  const cz = bounds.min.z + (bounds.span.z / 2);
+  out.x = offsetX + ((point.y - cy) * scale);
+  out.y = offsetY - ((point.z - cz) * scale);
   return out;
 }
 
@@ -829,8 +877,8 @@ function projectPerspectiveInto(point, center, scale, offsetX, offsetY, out) {
   const dx = point.x - center.x;
   const dy = point.y - center.y;
   const dz = point.z - center.z;
-  const yaw = -Math.PI / 4;
-  const pitch = Math.PI / 3.4;
+  const yaw = camera.yaw;
+  const pitch = camera.pitch;
   const x1 = (Math.cos(yaw) * dx) - (Math.sin(yaw) * dy);
   const y1 = (Math.sin(yaw) * dx) + (Math.cos(yaw) * dy);
   // Screen-space Y increases downward, so invert Z here to keep +Z visually upward.
@@ -845,6 +893,27 @@ function projectPerspectiveInto(point, center, scale, offsetX, offsetY, out) {
 }
 
 function computeSceneScale(bounds, width, height) {
+  if (playback.viewMode === 'front') {
+    const spanX = Math.max(1, bounds.span.x);
+    const spanZ = Math.max(1, bounds.span.z);
+    const scaleX = (width * 0.72) / spanX;
+    const scaleZ = (height * 0.72) / spanZ;
+    return Math.min(scaleX, scaleZ) * playback.zoom;
+  }
+  if (playback.viewMode === 'right') {
+    const spanY = Math.max(1, bounds.span.y);
+    const spanZ = Math.max(1, bounds.span.z);
+    const scaleY = (width * 0.72) / spanY;
+    const scaleZ = (height * 0.72) / spanZ;
+    return Math.min(scaleY, scaleZ) * playback.zoom;
+  }
+  if (playback.viewMode === 'top') {
+    const spanX = Math.max(1, bounds.span.x);
+    const spanY = Math.max(1, bounds.span.y);
+    const scaleX = (width * 0.72) / spanX;
+    const scaleY = (height * 0.72) / spanY;
+    return Math.min(scaleX, scaleY) * playback.zoom;
+  }
   const spanX = Math.max(1, bounds.span.x);
   const spanY = Math.max(1, bounds.span.y);
   const spanZ = Math.max(1, bounds.span.z);
@@ -855,22 +924,30 @@ function computeSceneScale(bounds, width, height) {
 function renderGrid(drawCtx, bounds, width, height, offsetX, offsetY, scale) {
   const stepBase = Math.max(bounds.span.x, bounds.span.y, 50);
   const step = Math.max(1, Math.pow(10, Math.floor(Math.log10(stepBase)) - 1));
+  const minX = Math.min(0, bounds.min.x);
+  const maxX = Math.max(0, bounds.max.x);
+  const minY = Math.min(0, bounds.min.y);
+  const maxY = Math.max(0, bounds.max.y);
+  const startX = Math.floor(minX / step) * step;
+  const endX = Math.ceil(maxX / step) * step;
+  const startY = Math.floor(minY / step) * step;
+  const endY = Math.ceil(maxY / step) * step;
   const from = { x: 0, y: 0 };
   const to = { x: 0, y: 0 };
   drawCtx.save();
   drawCtx.strokeStyle = 'rgba(148, 163, 184, 0.10)';
   drawCtx.lineWidth = 1;
-  for (let x = Math.floor(bounds.min.x / step) * step; x <= bounds.max.x + step; x += step) {
-    projectTopInto({ x, y: bounds.min.y, z: 0 }, bounds, scale, offsetX, offsetY, from);
-    projectTopInto({ x, y: bounds.max.y, z: 0 }, bounds, scale, offsetX, offsetY, to);
+  for (let x = startX; x <= endX + (step * 0.001); x += step) {
+    projectTopInto({ x, y: startY, z: 0 }, bounds, scale, offsetX, offsetY, from);
+    projectTopInto({ x, y: endY, z: 0 }, bounds, scale, offsetX, offsetY, to);
     drawCtx.beginPath();
     drawCtx.moveTo(from.x, from.y);
     drawCtx.lineTo(to.x, to.y);
     drawCtx.stroke();
   }
-  for (let y = Math.floor(bounds.min.y / step) * step; y <= bounds.max.y + step; y += step) {
-    projectTopInto({ x: bounds.min.x, y, z: 0 }, bounds, scale, offsetX, offsetY, from);
-    projectTopInto({ x: bounds.max.x, y, z: 0 }, bounds, scale, offsetX, offsetY, to);
+  for (let y = startY; y <= endY + (step * 0.001); y += step) {
+    projectTopInto({ x: startX, y, z: 0 }, bounds, scale, offsetX, offsetY, from);
+    projectTopInto({ x: endX, y, z: 0 }, bounds, scale, offsetX, offsetY, to);
     drawCtx.beginPath();
     drawCtx.moveTo(from.x, from.y);
     drawCtx.lineTo(to.x, to.y);
@@ -882,23 +959,31 @@ function renderGrid(drawCtx, bounds, width, height, offsetX, offsetY, scale) {
 function renderPerspectiveGrid(drawCtx, bounds, center, width, height, offsetX, offsetY, scale) {
   const stepBase = Math.max(bounds.span.x, bounds.span.y, 50);
   const step = Math.max(1, Math.pow(10, Math.floor(Math.log10(stepBase)) - 1));
+  const minX = Math.min(0, bounds.min.x);
+  const maxX = Math.max(0, bounds.max.x);
+  const minY = Math.min(0, bounds.min.y);
+  const maxY = Math.max(0, bounds.max.y);
+  const startX = Math.floor(minX / step) * step;
+  const endX = Math.ceil(maxX / step) * step;
+  const startY = Math.floor(minY / step) * step;
+  const endY = Math.ceil(maxY / step) * step;
   const from = { x: 0, y: 0 };
   const to = { x: 0, y: 0 };
   drawCtx.save();
   drawCtx.strokeStyle = 'rgba(148, 163, 184, 0.10)';
   drawCtx.lineWidth = 1;
 
-  for (let x = Math.floor(bounds.min.x / step) * step; x <= bounds.max.x + step; x += step) {
-    projectPerspectiveInto({ x, y: bounds.min.y, z: 0 }, center, scale, offsetX, offsetY, from);
-    projectPerspectiveInto({ x, y: bounds.max.y, z: 0 }, center, scale, offsetX, offsetY, to);
+  for (let x = startX; x <= endX + (step * 0.001); x += step) {
+    projectPerspectiveInto({ x, y: startY, z: 0 }, center, scale, offsetX, offsetY, from);
+    projectPerspectiveInto({ x, y: endY, z: 0 }, center, scale, offsetX, offsetY, to);
     drawCtx.beginPath();
     drawCtx.moveTo(from.x, from.y);
     drawCtx.lineTo(to.x, to.y);
     drawCtx.stroke();
   }
-  for (let y = Math.floor(bounds.min.y / step) * step; y <= bounds.max.y + step; y += step) {
-    projectPerspectiveInto({ x: bounds.min.x, y, z: 0 }, center, scale, offsetX, offsetY, from);
-    projectPerspectiveInto({ x: bounds.max.x, y, z: 0 }, center, scale, offsetX, offsetY, to);
+  for (let y = startY; y <= endY + (step * 0.001); y += step) {
+    projectPerspectiveInto({ x: startX, y, z: 0 }, center, scale, offsetX, offsetY, from);
+    projectPerspectiveInto({ x: endX, y, z: 0 }, center, scale, offsetX, offsetY, to);
     drawCtx.beginPath();
     drawCtx.moveTo(from.x, from.y);
     drawCtx.lineTo(to.x, to.y);
@@ -908,27 +993,101 @@ function renderPerspectiveGrid(drawCtx, bounds, center, width, height, offsetX, 
   drawCtx.restore();
 }
 
+function renderFrontGrid(drawCtx, bounds, width, height, offsetX, offsetY, scale) {
+  const stepBase = Math.max(bounds.span.x, bounds.span.z, 50);
+  const step = Math.max(1, Math.pow(10, Math.floor(Math.log10(stepBase)) - 1));
+  const minX = Math.min(0, bounds.min.x);
+  const maxX = Math.max(0, bounds.max.x);
+  const minZ = Math.min(0, bounds.min.z);
+  const maxZ = Math.max(0, bounds.max.z);
+  const startX = Math.floor(minX / step) * step;
+  const endX = Math.ceil(maxX / step) * step;
+  const startZ = Math.floor(minZ / step) * step;
+  const endZ = Math.ceil(maxZ / step) * step;
+  const from = { x: 0, y: 0 };
+  const to = { x: 0, y: 0 };
+  drawCtx.save();
+  drawCtx.strokeStyle = 'rgba(148, 163, 184, 0.10)';
+  drawCtx.lineWidth = 1;
+  for (let x = startX; x <= endX + (step * 0.001); x += step) {
+    projectFrontInto({ x, y: 0, z: startZ }, bounds, scale, offsetX, offsetY, from);
+    projectFrontInto({ x, y: 0, z: endZ }, bounds, scale, offsetX, offsetY, to);
+    drawCtx.beginPath();
+    drawCtx.moveTo(from.x, from.y);
+    drawCtx.lineTo(to.x, to.y);
+    drawCtx.stroke();
+  }
+  for (let z = startZ; z <= endZ + (step * 0.001); z += step) {
+    projectFrontInto({ x: startX, y: 0, z }, bounds, scale, offsetX, offsetY, from);
+    projectFrontInto({ x: endX, y: 0, z }, bounds, scale, offsetX, offsetY, to);
+    drawCtx.beginPath();
+    drawCtx.moveTo(from.x, from.y);
+    drawCtx.lineTo(to.x, to.y);
+    drawCtx.stroke();
+  }
+  drawCtx.restore();
+}
+
+function renderRightGrid(drawCtx, bounds, width, height, offsetX, offsetY, scale) {
+  const stepBase = Math.max(bounds.span.y, bounds.span.z, 50);
+  const step = Math.max(1, Math.pow(10, Math.floor(Math.log10(stepBase)) - 1));
+  const minY = Math.min(0, bounds.min.y);
+  const maxY = Math.max(0, bounds.max.y);
+  const minZ = Math.min(0, bounds.min.z);
+  const maxZ = Math.max(0, bounds.max.z);
+  const startY = Math.floor(minY / step) * step;
+  const endY = Math.ceil(maxY / step) * step;
+  const startZ = Math.floor(minZ / step) * step;
+  const endZ = Math.ceil(maxZ / step) * step;
+  const from = { x: 0, y: 0 };
+  const to = { x: 0, y: 0 };
+  drawCtx.save();
+  drawCtx.strokeStyle = 'rgba(148, 163, 184, 0.10)';
+  drawCtx.lineWidth = 1;
+  for (let y = startY; y <= endY + (step * 0.001); y += step) {
+    projectRightInto({ x: 0, y, z: startZ }, bounds, scale, offsetX, offsetY, from);
+    projectRightInto({ x: 0, y, z: endZ }, bounds, scale, offsetX, offsetY, to);
+    drawCtx.beginPath();
+    drawCtx.moveTo(from.x, from.y);
+    drawCtx.lineTo(to.x, to.y);
+    drawCtx.stroke();
+  }
+  for (let z = startZ; z <= endZ + (step * 0.001); z += step) {
+    projectRightInto({ x: 0, y: startY, z }, bounds, scale, offsetX, offsetY, from);
+    projectRightInto({ x: 0, y: endY, z }, bounds, scale, offsetX, offsetY, to);
+    drawCtx.beginPath();
+    drawCtx.moveTo(from.x, from.y);
+    drawCtx.lineTo(to.x, to.y);
+    drawCtx.stroke();
+  }
+  drawCtx.restore();
+}
+
 function renderAxes(drawCtx, bounds, width, height, offsetX, offsetY, scale, center) {
   const p0 = { x: 0, y: 0 };
   const p1 = { x: 0, y: 0 };
   const p2 = { x: 0, y: 0 };
   const p3 = { x: 0, y: 0 };
-  const origin = playback.viewMode === 'top'
-    ? projectTopInto({ x: 0, y: 0, z: 0 }, bounds, scale, offsetX, offsetY, p0)
-    : projectPerspectiveInto({ x: 0, y: 0, z: 0 }, center, scale, offsetX, offsetY, p0);
-  const xAxis = playback.viewMode === 'top'
-    ? projectTopInto({ x: 25, y: 0, z: 0 }, bounds, scale, offsetX, offsetY, p1)
-    : projectPerspectiveInto({ x: 25, y: 0, z: 0 }, center, scale, offsetX, offsetY, p1);
-  const yAxis = playback.viewMode === 'top'
-    ? projectTopInto({ x: 0, y: 25, z: 0 }, bounds, scale, offsetX, offsetY, p2)
-    : projectPerspectiveInto({ x: 0, y: 25, z: 0 }, center, scale, offsetX, offsetY, p2);
-  const zAxis = playback.viewMode === 'top'
-    ? projectTopInto({ x: 0, y: 0, z: 25 }, bounds, scale, offsetX, offsetY, p3)
-    : projectPerspectiveInto({ x: 0, y: 0, z: 25 }, center, scale, offsetX, offsetY, p3);
+  const proj = (point, out) => {
+    if (playback.viewMode === 'top') return projectTopInto(point, bounds, scale, offsetX, offsetY, out);
+    if (playback.viewMode === 'front') return projectFrontInto(point, bounds, scale, offsetX, offsetY, out);
+    if (playback.viewMode === 'right') return projectRightInto(point, bounds, scale, offsetX, offsetY, out);
+    return projectPerspectiveInto(point, center, scale, offsetX, offsetY, out);
+  };
+  const origin = proj({ x: 0, y: 0, z: 0 }, p0);
+  const xAxis = proj({ x: 25, y: 0, z: 0 }, p1);
+  const yAxis = proj({ x: 0, y: 25, z: 0 }, p2);
+  const zAxis = proj({ x: 0, y: 0, z: 25 }, p3);
 
   drawCtx.save();
   drawCtx.lineWidth = 2;
-  [[xAxis, '#ef4444'], [yAxis, '#22c55e'], [zAxis, '#60a5fa']].forEach(([endpoint, color]) => {
+  const axesToDraw = playback.viewMode === 'front'
+    ? [[xAxis, '#ef4444'], [zAxis, '#60a5fa']]
+    : playback.viewMode === 'right'
+      ? [[yAxis, '#22c55e'], [zAxis, '#60a5fa']]
+      : [[xAxis, '#ef4444'], [yAxis, '#22c55e'], [zAxis, '#60a5fa']];
+
+  axesToDraw.forEach(([endpoint, color]) => {
     drawCtx.strokeStyle = color;
     drawCtx.beginPath();
     drawCtx.moveTo(origin.x, origin.y);
@@ -944,13 +1103,21 @@ function renderStaticLayer(bounds, width, height, offsetX, offsetY, scale, cente
     width,
     height,
     playback.zoom.toFixed(3),
+    camera.yaw.toFixed(3),
+    camera.pitch.toFixed(3),
+    camera.panX.toFixed(1),
+    camera.panY.toFixed(1),
     bounds.min.x.toFixed(3), bounds.min.y.toFixed(3), bounds.min.z.toFixed(3),
     bounds.max.x.toFixed(3), bounds.max.y.toFixed(3), bounds.max.z.toFixed(3)
   ].join('|');
   if (key !== staticLayerKey) {
     staticLayerCtx.clearRect(0, 0, width, height);
     if (playback.viewMode === 'top') {
-      renderGrid(staticLayerCtx, bounds, width, height, offsetX - ((bounds.span.x * scale) / 2), offsetY + ((bounds.span.y * scale) / 2), scale);
+      renderGrid(staticLayerCtx, bounds, width, height, offsetX, offsetY, scale);
+    } else if (playback.viewMode === 'front') {
+      renderFrontGrid(staticLayerCtx, bounds, width, height, offsetX, offsetY, scale);
+    } else if (playback.viewMode === 'right') {
+      renderRightGrid(staticLayerCtx, bounds, width, height, offsetX, offsetY, scale);
     } else {
       renderPerspectiveGrid(staticLayerCtx, bounds, center, width, height, offsetX, offsetY, scale);
     }
@@ -985,12 +1152,11 @@ function render() {
     z: bounds.min.z + (bounds.span.z / 2)
   };
   const scale = computeSceneScale(bounds, width, height);
-  const offsetX = width * 0.5;
-  const offsetY = height * 0.58;
+  const baseOffsetX = width * 0.5;
+  const baseOffsetY = playback.viewMode === 'perspective' ? height * 0.58 : height * 0.5;
+  const offsetX = baseOffsetX + camera.panX;
+  const offsetY = baseOffsetY + camera.panY;
   const visibleSegmentEnd = getVisibleSegmentEnd();
-  const project = playback.viewMode === 'top'
-    ? point => projectTop(point, bounds, scale, offsetX - ((bounds.span.x * scale) / 2), offsetY + ((bounds.span.y * scale) / 2))
-    : point => projectPerspective(point, center, scale, offsetX, offsetY);
 
   renderStaticLayer(bounds, width, height, offsetX, offsetY, scale, center);
 
@@ -1003,9 +1169,12 @@ function render() {
   let hasRapid = false;
   let hasFeed = false;
   let hasActive = false;
-  const projectInto = playback.viewMode === 'top'
-    ? (point, out) => projectTopInto(point, bounds, scale, offsetX - ((bounds.span.x * scale) / 2), offsetY + ((bounds.span.y * scale) / 2), out)
-    : (point, out) => projectPerspectiveInto(point, center, scale, offsetX, offsetY, out);
+  const projectInto = (point, out) => {
+    if (playback.viewMode === 'top') return projectTopInto(point, bounds, scale, offsetX, offsetY, out);
+    if (playback.viewMode === 'front') return projectFrontInto(point, bounds, scale, offsetX, offsetY, out);
+    if (playback.viewMode === 'right') return projectRightInto(point, bounds, scale, offsetX, offsetY, out);
+    return projectPerspectiveInto(point, center, scale, offsetX, offsetY, out);
+  };
 
   for (let index = 0; index <= visibleEnd; index += 1) {
     const segment = timeline.segments[index];
@@ -1044,9 +1213,16 @@ function render() {
   }
 
   const activeCommand = timeline.commands[clampCommandCursor(playback.commandCursor)] || null;
+  const viewLabel = {
+    top: 'Top (XY)',
+    front: 'Front (ZX)',
+    right: 'Right (ZY)',
+    perspective: 'Perspective'
+  }[playback.viewMode] || playback.viewMode;
+
   setStatusText([
     `${timeline.title}`,
-    `View: ${playback.viewMode === 'top' ? 'Top' : 'Perspective'}`,
+    `View: ${viewLabel}`,
     `Commands: ${timeline.commandCount}`,
     `Segments: ${timeline.segments.length}`,
     activeCommand ? `Active: ${activeCommand.display}` : 'Active: none'
@@ -1859,6 +2035,133 @@ window.addEventListener('message', event => {
         _pendingTimelinePayload = null;
       }
     });
+  }
+});
+
+let isDragging = false;
+let dragMode = null; // 'orbit' | 'pan'
+let lastPointerX = 0;
+let lastPointerY = 0;
+let isSpacePressed = false;
+
+function updateCanvasCursor() {
+  if (dragMode === 'orbit') {
+    canvas.classList.add('orbiting');
+    canvas.classList.remove('panning');
+  } else if (dragMode === 'pan') {
+    canvas.classList.add('panning');
+    canvas.classList.remove('orbiting');
+  } else {
+    canvas.classList.remove('orbiting');
+    canvas.classList.remove('panning');
+  }
+}
+
+canvas.addEventListener('contextmenu', e => {
+  e.preventDefault();
+});
+
+canvas.addEventListener('mousedown', e => {
+  if (playback.viewMode === 'benchmark') return;
+  if (!timeline) return;
+
+  const isRightClick = e.button === 2;
+  const isLeftClick = e.button === 0;
+
+  if (isRightClick || (isLeftClick && isSpacePressed)) {
+    // Pan mode
+    isDragging = true;
+    dragMode = 'pan';
+    lastPointerX = e.clientX;
+    lastPointerY = e.clientY;
+    updateCanvasCursor();
+    e.preventDefault();
+  } else if (isLeftClick) {
+    if (playback.viewMode === 'perspective') {
+      // Orbit mode
+      isDragging = true;
+      dragMode = 'orbit';
+      lastPointerX = e.clientX;
+      lastPointerY = e.clientY;
+      updateCanvasCursor();
+      e.preventDefault();
+    }
+  }
+});
+
+window.addEventListener('mousemove', e => {
+  if (!isDragging || !dragMode) return;
+
+  const dx = e.clientX - lastPointerX;
+  const dy = e.clientY - lastPointerY;
+  lastPointerX = e.clientX;
+  lastPointerY = e.clientY;
+
+  if (dragMode === 'orbit') {
+    camera.yaw += dx * 0.008;
+    camera.pitch = Math.max(0.05, Math.min(Math.PI / 2 - 0.05, camera.pitch - dy * 0.008));
+    render();
+  } else if (dragMode === 'pan') {
+    camera.panX += dx;
+    camera.panY += dy;
+    render();
+  }
+});
+
+window.addEventListener('mouseup', e => {
+  if (isDragging) {
+    isDragging = false;
+    dragMode = null;
+    updateCanvasCursor();
+  }
+});
+
+window.addEventListener('keydown', e => {
+  if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) {
+    return;
+  }
+
+  if (e.code === 'Space' && !e.repeat) {
+    isSpacePressed = true;
+    if (!isDragging) {
+      canvas.classList.add('panning');
+    }
+    e.preventDefault();
+  } else if (!e.ctrlKey && !e.altKey && !e.metaKey) {
+    const key = e.key.toLowerCase();
+    if (key === 't') {
+      playback.viewMode = 'top';
+      viewSelect.value = 'top';
+      applyViewModeUi();
+      render();
+    } else if (key === 'f') {
+      playback.viewMode = 'front';
+      viewSelect.value = 'front';
+      applyViewModeUi();
+      render();
+    } else if (key === 'r') {
+      playback.viewMode = 'right';
+      viewSelect.value = 'right';
+      applyViewModeUi();
+      render();
+    } else if (key === 'p' || key === 'h') {
+      playback.viewMode = 'perspective';
+      viewSelect.value = 'perspective';
+      applyViewModeUi();
+      render();
+    } else if (key === 'z') {
+      fitPreview();
+    }
+  }
+});
+
+window.addEventListener('keyup', e => {
+  if (e.code === 'Space') {
+    isSpacePressed = false;
+    if (!isDragging) {
+      updateCanvasCursor();
+    }
+    e.preventDefault();
   }
 });
 
