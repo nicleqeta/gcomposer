@@ -247,6 +247,14 @@ function fitArcsInLines(lines, toleranceMm, minPoints) {
                       && Math.abs(cls.target.y - prev.y) < 1e-9
                       && Math.abs(cls.target.z - prev.z) < 1e-9;
       if (!isZeroMove) {
+        // A Z move ends the current XY chain; preserve it outside that chain so
+        // it cannot make an otherwise planar arc appear helical.
+        if (Math.abs(cls.target.z - prev.z) > 1e-9) {
+          flushChain();
+          out.push(raw);
+          state.position = cls.target;
+          continue;
+        }
         if (chain.length === 0) {
           chainStart = { ...state.position };
           // Remember the unit scale in effect when the chain started so emitted
@@ -254,8 +262,6 @@ function fitArcsInLines(lines, toleranceMm, minPoints) {
           chainUnitScale = unitScale(state.units);
         }
         chain.push({ x: cls.target.x, y: cls.target.y, z: cls.target.z, raw: cls.raw, hasFeed: cls.hasFeed });
-        // Z change breaks the XY arc chain
-        if (Math.abs(cls.target.z - prev.z) > 1e-9) flushChain();
       }
       state.position = cls.target;
       continue;
