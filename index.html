@@ -2046,7 +2046,7 @@ $I" title="Enter up to 10 commands, one per line."></textarea>
         <span class="section-toggle-icon">&#9656;</span>
       </summary>
       <div class="section-content">
-        <textarea id="gcode-input" placeholder="G0 X0 Y0&#10;G1 X10 F500&#10;M30" style="min-height:120px;"></textarea>
+        <textarea id="gcode-input" placeholder="G0 X0 Y0&#10;G1 X10 F500&#10;M30" title="Paste G-code or drop a .gc, .g, .gcode, .txt, .nc, .ngc, or .tap file." style="min-height:120px;"></textarea>
         <div class="gcode-mode-row">
           <label for="gcode-exec-mode">Mode:</label>
           <select id="gcode-exec-mode">
@@ -9569,7 +9569,7 @@ function openGcodeInputPreview() {
 
 async function loadDroppedGcodeFile(file) {
   if (!file) return;
-  const allowedExtensions = ['.gc', '.g', '.gcode', '.txt', '.nc', '.ngc'];
+  const allowedExtensions = ['.gc', '.g', '.gcode', '.txt', '.nc', '.ngc', '.tap'];
   const loweredName = String(file.name || '').toLowerCase();
   const isAllowed = allowedExtensions.some(function(ext) { return loweredName.endsWith(ext); });
   if (!isAllowed) {
