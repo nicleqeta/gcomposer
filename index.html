@@ -2058,7 +2058,7 @@ $I" title="Enter up to 10 commands, one per line."></textarea>
           <button class="btn" id="gcode-preview-btn" type="button" disabled>Preview</button>
           <button class="btn primary" id="gcode-add-btn" type="button" disabled>Add to Queue</button>
           <button class="btn" id="gcode-save-arcs-btn" type="button" disabled
-                  title="Fit arcs into the G-code and save as a new file (original untouched). You can also drop a .gcode/.nc file directly on this button.">Save with Arcs</button>
+                  title="Fit arcs into the G-code and save as a new file (original untouched). Drop a .tapx file to save as .tap with CRLF line endings.">Save with Arcs</button>
         </div>
         <button class="btn" id="gcode-clear-btn" type="button" style="margin-bottom:8px;">Clear</button>
       </div>
@@ -9327,8 +9327,11 @@ function suggestedGcodeFileName(label, fallbackExt) {
   return /\.[a-z0-9]+$/i.test(safe) ? safe : safe + (fallbackExt || '.gcode');
 }
 
-function downloadGcodeText(text, filename) {
-  const blob = new Blob([text + '\n'], { type: 'text/plain' });
+function downloadGcodeText(text, filename, lineEnding) {
+  const content = lineEnding === '\r\n'
+    ? String(text).replace(/\r\n|\r|\n/g, '\r\n').replace(/(?:\r\n)?$/, '\r\n')
+    : text + '\n';
+  const blob = new Blob([content], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -9344,6 +9347,8 @@ function downloadGcodeText(text, filename) {
 async function saveGcodeInputWithArcs(rawText, sourceName) {
   if (!rawText || !rawText.trim()) { addLine('Save with Arcs: no G-code to process', 'err'); return; }
   if (!gcodeProcessWorkerReady) { addLine('Save with Arcs unavailable: process worker not ready', 'err'); return; }
+  const isTapxFile = /\.tapx$/i.test(String(sourceName || ''));
+  const tapxOutputName = isTapxFile ? String(sourceName).replace(/\.tapx$/i, '.tap') : null;
   const lines = gcodeNormalizeLines(rawText);
   if (!lines.length) { addLine('Save with Arcs: no valid commands', 'err'); return; }
   addLine(`Arc fitting ${lines.length} line(s)${sourceName ? ' from ' + sourceName : ''}...`, 'sys');
@@ -9360,7 +9365,21 @@ async function saveGcodeInputWithArcs(rawText, sourceName) {
               'beyond tolerance (arc bulge). Review the envelope check below before running.', 'warn');
     }
     if (!report.arcsCreated) {
+      if (isTapxFile) {
+        downloadGcodeText(rawText, tapxOutputName, '\r\n');
+        addLine('Save with Arcs: no arc chains in XY plane found within tolerance (' +
+                GCODE_FIT_ARC_TOLERANCE_MM + 'mm). Saved without arc fitting as ' + tapxOutputName, 'warn');
+        return;
+      }
       addLine('Save with Arcs: no arc chains in XY plane found within tolerance (' + GCODE_FIT_ARC_TOLERANCE_MM + 'mm) — file not written', 'warn');
+      return;
+    }
+    if (isTapxFile) {
+      const outputText = result.lines.join('\n');
+      downloadGcodeText(outputText, tapxOutputName, '\r\n');
+      addLine(`Save with Arcs: ${report.arcsCreated} arc(s) replaced ${report.linearMovesMerged} linear move(s), ` +
+              `max deviation ${Number(report.maxDeviationMm).toFixed(4)}mm.`, 'sys');
+      addLine(`Saved as ${tapxOutputName}`, 'sys');
       return;
     }
     // Build output name: same extension, _ARC suffix before it
