@@ -1,6 +1,11 @@
 .git
+.github
+.vscode
 .wrangler
+.tmp-*
 wrangler.toml
 worker.js
 README.md
 mcp
+node_modules
+gcom-dev/profiles/.svelte-kit
