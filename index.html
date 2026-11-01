@@ -1832,6 +1832,7 @@
   <div class="status-group">
     <div class="status-pill disconnected" id="transport-pill">Disconnected</div>
     <div class="status-pill unknown" id="machine-pill">Unknown</div>
+    <button class="icon-btn" id="local-agent-open" type="button">Local agent</button>
     <button class="icon-btn" id="ai-sidebar-toggle-btn" title="Toggle AI Agent">&#129302; AI</button>
   </div>
 </header>
@@ -5065,6 +5066,7 @@ function basicValidateScript(source, paramNames = []) {
   if (order.length && !/^END$/i.test(lines[order[order.length - 1]])) {
     addWarningDiagnostic(order[order.length - 1], 'The script does not end with END; execution will stop after the last line.', DIAGNOSTIC_CODES.W001_BACKWARD_GOTO);
   }
+  return { errors, warnings, lines, order };
 }
 
 function basicValidateDraft() {
@@ -13339,5 +13341,30 @@ window.addEventListener('beforeunload', function(e) {
     <div id="machine-defaults-body" class="machine-defaults-body"></div>
   </div>
 </div>
+<div id="local-agent-overlay" class="machine-defaults-overlay" hidden>
+  <div class="machine-defaults-panel" role="dialog" aria-modal="true" aria-labelledby="local-agent-title">
+    <div class="machine-defaults-header">
+      <span id="local-agent-title">Local agent connection</span>
+      <button type="button" class="machine-defaults-close" id="local-agent-close" aria-label="Close">X</button>
+    </div>
+    <div class="machine-defaults-body">
+      <p>Pair only an agent you trust. It can read your draft and machine context and propose changes. Its model provider may receive that data. It cannot run scripts or send machine commands.</p>
+      <p>Open the pairing page shown by your agent. Enter its port and pairing code here; never send the code to your agent.</p>
+      <p><label>Port <input id="local-agent-port" inputmode="numeric" autocomplete="off"></label></p>
+      <p><label>Pairing code <input id="local-agent-token" type="password" autocomplete="off"></label></p>
+      <p><button id="local-agent-connect" type="button">Connect</button> <button id="local-agent-disconnect" type="button">Disconnect</button> <button id="local-agent-restore" type="button">Restore previous draft</button></p>
+      <p id="local-agent-status" role="status">Disconnected</p>
+      <div id="local-agent-review" hidden>
+        <h4>Proposed GCOM - review before applying</h4>
+        <p>Validation is not a physical safety check. Preview and inspect the script before manually running it.</p>
+        <pre id="local-agent-proposal"></pre>
+        <pre id="local-agent-diagnostics"></pre>
+        <button id="local-agent-approve" type="button">Apply proposal</button>
+        <button id="local-agent-reject" type="button">Reject</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/agent-bridge.js"></script>
 </body>
 </html>

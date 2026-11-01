@@ -33,7 +33,7 @@ GCOM scripts may use five abstract keywords — `HOME`, `STATUS`, `RESET`, `SPIN
 
 **Profile-aware AI agent**
 
-The AI agent receives a machine contract derived from the active profile, including rule set table, operation templates and variable defaults, preferred style guidance, and hard rules (one G-code per SEND, use abstract keywords, reference the correct variable names for speed vs. spindle). A deterministic repair pass runs after generation and rewrites any remaining invalid patterns before the script is returned.
+The embedded AI agent uses Workers AI and receives controller guidance and, when loaded, user machine profile examples. AI-generated scripts are reviewed in the app before use. The optional local MCP connector described below lets users work with their own compatible agent instead.
 
 **Validation**
 
@@ -55,6 +55,40 @@ It can help you:
 * test different startup and DTR behaviors
 * copy a structured diagnostics log for support or forum posts
 * save and share scripts via short links
+
+---
+
+## Use your own AI agent (local MCP)
+
+The optional connector lets an MCP-compatible agent read the current draft and machine guidance, validate a proposed GCOM package, and submit it for review in the app. It cannot connect to a controller, send commands, or start a script. The operator must explicitly apply a proposal and manually preview and run it. Validation and preview are not guarantees of physical safety.
+
+The first version runs from a checkout and requires Node.js 22 or later. It is not published as an npm package:
+
+1. Run `npm ci --prefix mcp` in the repository.
+2. Configure your agent to launch `node` with the absolute path to `mcp/server.js`. For example, an MCP client using a JSON configuration may accept:
+
+   ```json
+   {
+     "mcpServers": {
+       "gcomposer": {
+         "command": "node",
+         "args": ["C:\\path\\to\\grbl-diagnostic\\mcp\\server.js"]
+       }
+     }
+   }
+   ```
+
+   Configuration locations and restart steps vary by client.
+3. Ask the agent for gcomposer connection status. Open the **local pairing page** shown there yourself. Open gcomposer in Chrome or Edge, click **Local agent**, and enter the port and pairing code from that page. Approve the connection prompt and the browser's local-network permission if prompted. Do not send the pairing code to the agent.
+4. Ask the agent to read the context, validate a script, or propose a change. Review the proposed GCOM in the app and choose **Apply proposal** or **Reject**. The app keeps one previous draft for recovery using **Restore previous draft**.
+5. Click **Disconnect** to end the connection and invalidate that pairing code. Stopping the helper also invalidates it. A restarted helper has a new port and code.
+
+The helper defaults to the `https://gcomposer.app` origin. For a local development app, pass `--origin http://127.0.0.1:PORT` as additional arguments, using the exact origin of that app. Only pair an agent you trust. Drafts, machine notes, and other information the agent reads may be sent to its model provider; use a local model if that is a requirement. The local pairing page and helper are accessible to processes on the same computer, so this is not a security boundary against a hostile local user.
+
+The connector uses the app's local syntax checks and the existing validation endpoint. It does not replace compilation, motion preview, or an operator's safety checks. It does not automatically send terminal logs. The existing embedded Cloudflare AI agent remains available during the transition.
+
+To run the connector integration test, run `npm test --prefix mcp`. On Windows it uses the standard Microsoft Edge install location; set `EDGE_PATH` to an installed Chromium-based browser executable if necessary.
+The current integration test uses Edge with a local HTTP app; deployed HTTPS local-network permission behavior and other browsers have not yet been verified.
 
 ---
 

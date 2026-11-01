@@ -1,2 +1,3 @@
 /.wrangler/
 /gcom-dev-worker/.wrangler/
+/mcp/node_modules/
